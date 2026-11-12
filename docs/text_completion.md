@@ -1,0 +1,188 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# /completions
+
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Streaming | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input prompts and output text (non-streaming only) |
+| Supported Providers | All Chat Completion Providers | |
+
+### Usage
+
+Linten sends a text completion request for a chat model to that model's chat completions endpoint and returns the answer in the text completion format. To call OpenAI's legacy `/v1/completions` endpoint directly, see [OpenAI (Text Completion)](./providers/text_completion_openai.md).
+
+<Tabs>
+<TabItem value="python" label="Linten Python SDK">
+
+```python keep-model-ids
+from linten import text_completion
+
+response = text_completion(
+    model="gpt-5.4-mini",
+    prompt="Say this is a test",
+    max_tokens=7
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Linten Proxy Server">
+
+1. Define models on config.yaml
+
+```yaml keep-model-ids
+model_list:
+  - model_name: gpt-5.4-mini
+    linten_params:
+      model: openai/gpt-5.4-mini
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start linten proxy server 
+
+```
+linten --config config.yaml
+```
+
+<Tabs>
+<TabItem value="python" label="OpenAI Python SDK">
+
+```python keep-model-ids
+from openai import OpenAI
+
+# set base_url to your proxy server
+# set api_key to send to proxy server
+client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:4000")
+
+response = client.completions.create(
+    model="gpt-5.4-mini",
+    prompt="Say this is a test",
+    max_tokens=7
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="curl" label="Curl Request">
+
+```shell keep-model-ids
+curl --location 'http://0.0.0.0:4000/completions' \
+    --header 'Content-Type: application/json' \
+    --header "Authorization: Bearer $LINTEN_API_KEY" \
+    --data '{
+        "model": "gpt-5.4-mini",
+        "prompt": "Say this is a test",
+        "max_tokens": 7
+    }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
+## Input Params
+
+Linten accepts and translates the [OpenAI Text Completion params](https://platform.openai.com/docs/api-reference/completions) across all supported providers.
+
+### Required Fields
+
+- `model`: *string* - ID of the model to use
+- `prompt`: *string or array* - The prompt(s) to generate completions for
+
+### Optional Fields
+
+- `best_of`: *integer* - Generates best_of completions server-side and returns the "best" one
+- `echo`: *boolean* - Echo back the prompt in addition to the completion.
+- `frequency_penalty`: *number* - Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency.
+- `logit_bias`: *map* - Modify the likelihood of specified tokens appearing in the completion
+- `logprobs`: *integer* - Include the log probabilities on the logprobs most likely tokens. Max value of 5
+- `max_tokens`: *integer* - The maximum number of tokens to generate.
+- `n`: *integer* - How many completions to generate for each prompt.
+- `presence_penalty`: *number* - Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far.
+- `seed`: *integer* - If specified, system will attempt to make deterministic samples
+- `stop`: *string or array* - Up to 4 sequences where the API will stop generating tokens
+- `stream`: *boolean* - Whether to stream back partial progress. Defaults to false
+- `suffix`: *string* - The suffix that comes after a completion of inserted text
+- `temperature`: *number* - What sampling temperature to use, between 0 and 2. 
+- `top_p`: *number* - An alternative to sampling with temperature, called nucleus sampling. 
+- `user`: *string* - A unique identifier representing your end-user
+
+On OpenAI, `best_of`, `echo`, `suffix` and an integer `logprobs` only work with the `text-completion-openai/` prefix, which calls the legacy `/v1/completions` endpoint. A chat model behind the `openai/` prefix answers 400 for them. See [OpenAI (Text Completion)](./providers/text_completion_openai.md).
+
+## Output Format
+Here's the exact JSON output format you can expect from completion calls:
+
+
+[**Follows OpenAI's output format**](https://platform.openai.com/docs/api-reference/completions/object)
+
+<Tabs>
+
+<TabItem value="non-streaming" label="Non-Streaming Response">
+
+```python keep-model-ids
+{
+  "id": "cmpl-uqkvlQyYK7bGYrRHQ0eXlWi7",
+  "object": "text_completion",
+  "created": 1589478378,
+  "model": "gpt-5.4-mini",
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "text": "\n\nThis is indeed a test",
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 7,
+    "total_tokens": 12
+  }
+}
+
+```
+</TabItem>
+<TabItem value="streaming" label="Streaming Response">
+
+```python keep-model-ids
+{
+  "id": "cmpl-7iA7iJjj8V2zOkCGvWF2hAkDWBQZe",
+  "object": "text_completion",
+  "created": 1690759702,
+  "choices": [
+    {
+      "text": "This",
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": null
+    }
+  ],
+  "model": "gpt-5.4-mini",
+  "system_fingerprint": null,
+}
+
+```
+
+</TabItem>
+</Tabs>
+
+
+## **Supported Providers**
+
+| Provider    | Link to Usage      |
+|-------------|--------------------|
+| OpenAI      |   [Usage](../docs/providers/text_completion_openai)                 | 
+| Azure OpenAI|   [Usage](../docs/providers/azure)                 |  
+
+

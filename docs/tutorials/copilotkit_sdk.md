@@ -1,0 +1,99 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# CopilotKit SDK with Linten
+
+Use CopilotKit SDK with any LLM provider through Linten Proxy.
+
+> **Note:** CopilotKit SDK works with Linten Proxy <SinceVersion v="1.81.7-nightly" />
+
+
+## Quick Start
+
+### 1. Add Model to Config
+
+```yaml title="config.yaml"
+model_list:
+  - model_name: {{anthropic}}
+    linten_params:
+      model: "anthropic/{{anthropic}}"
+      api_key: "os.environ/ANTHROPIC_API_KEY"
+```
+
+### 2. Start Linten Proxy
+
+```bash
+linten --config config.yaml
+```
+
+### 3. Use CopilotKit SDK
+
+```typescript
+import OpenAI from "openai";
+import {
+  CopilotRuntime,
+  OpenAIAdapter,
+  copilotRuntimeNextJSAppRouterEndpoint,
+} from "@copilotkit/runtime";
+import { NextRequest } from "next/server";
+
+const model = "{{anthropic}}";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || "sk-<your-linten-api-key>",
+  baseURL: process.env.OPENAI_BASE_URL || "http://localhost:4000/v1",
+});
+
+const serviceAdapter = new OpenAIAdapter({ openai, model });
+const runtime = new CopilotRuntime();
+
+export const POST = async (req: NextRequest) => {
+  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
+    runtime,
+    serviceAdapter,
+    endpoint: "/api/copilotkit",
+  });
+  return handleRequest(req);
+};
+```
+
+### 4. Test
+
+```bash
+curl -X POST http://localhost:3000/api/copilotkit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "agent/run",
+    "params": {
+        "agentId": "default"
+    },
+        "runId": "your_run_id",
+        "threadId": "your_thread_id",
+        "runId": ""your_run_id"",
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+        "state": {},
+        "messages": [
+            {
+                "id": "166e573e-f7c6-4c0f-8685-04dbefec18be",
+                "content": "Hi",
+                "role": "user"
+            }
+        ]
+    }
+}'
+```
+
+## Environment Variables
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `OPENAI_API_KEY` | `sk-<your-linten-api-key>` | Your Linten API key |
+| `OPENAI_BASE_URL` | `http://localhost:4000/v1` | Linten proxy URL |
+
+
+## Related Resources
+
+- [CopilotKit Documentation](https://docs.copilotkit.ai)
+- [Linten Proxy Quick Start](../proxy/quick_start)

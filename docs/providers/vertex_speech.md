@@ -1,0 +1,470 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Vertex AI Text to Speech
+
+| Property | Details |
+|-------|-------|
+| Description | Google Cloud Text-to-Speech with Chirp3 HD voices and Gemini TTS |
+| Provider Route on Linten | `vertex_ai/chirp` (Chirp), `vertex_ai/gemini-*-tts` (Gemini) |
+
+## Chirp3 HD Voices
+
+Google Cloud Text-to-Speech API with high-quality Chirp3 HD voices.
+
+### Quick Start
+
+#### Linten Python SDK
+
+```python showLineNumbers title="Chirp3 Quick Start"
+from linten import speech
+from pathlib import Path
+
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+    model="vertex_ai/chirp",
+    voice="alloy",  # OpenAI voice name - automatically mapped
+    input="Hello, this is Vertex AI Text to Speech",
+    vertex_project="your-project-id",
+    vertex_location="us-central1",
+)
+response.stream_to_file(speech_file_path)
+```
+
+#### Linten AI Gateway
+
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: vertex-tts
+    linten_params:
+      model: vertex_ai/chirp
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+**2. Start the proxy**
+
+```bash title="Start Linten Proxy"
+linten --config /path/to/config.yaml
+```
+
+**3. Make requests**
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Chirp3 Quick Start"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-tts",
+    "voice": "alloy",
+    "input": "Hello, this is Vertex AI Text to Speech"
+  }' \
+  --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Chirp3 Quick Start"
+import openai
+
+client = openai.OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="alloy",
+    input="Hello, this is Vertex AI Text to Speech",
+)
+response.stream_to_file("speech.mp3")
+```
+
+</TabItem>
+</Tabs>
+
+### Regional Endpoints
+
+The deployment's `vertex_location` picks the Cloud Text-to-Speech host for Chirp. <SinceVersion v="1.110.0" /> On earlier versions, every Chirp request goes to the global host.
+
+| `vertex_location` | Host Linten calls |
+|-------------------|--------------------|
+| `us`, `us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `us-west2`, `us-west3`, `us-west4`, `us-west5` | `us-texttospeech.googleapis.com` |
+| `eu`, `europe-central2`, `europe-north1`, `europe-north2`, `europe-southwest1`, `europe-west1`, `europe-west3`, `europe-west4`, `europe-west8`, `europe-west9`, `europe-west10`, `europe-west12` | `eu-texttospeech.googleapis.com` |
+| Not set, `global`, or any other location | `texttospeech.googleapis.com` |
+
+Only the `vertex_location` set on the deployment or passed in the call picks the Chirp host. `VERTEXAI_LOCATION` and `linten.vertex_location` do not.
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: chirp-eu
+    linten_params:
+      model: vertex_ai/chirp
+      vertex_project: "your-project-id"
+      vertex_location: "eu"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+```bash showLineNumbers title="Chirp on the EU host"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "chirp-eu",
+    "voice": "fr-FR-Chirp3-HD-Aoede",
+    "input": "Bonjour, votre rendez-vous est confirmé."
+  }' \
+  --output speech.wav
+```
+
+Linten sends this request to `https://eu-texttospeech.googleapis.com/v1/text:synthesize`, and the request's spend log shows that URL as its `api_base`.
+
+To use a host the table does not list, such as a single-region host, set `api_base` to the full URL, for example `https://europe-west2-texttospeech.googleapis.com/v1/text:synthesize`. An `api_base` always wins over `vertex_location`.
+
+:::note
+If your network allows outbound traffic only to `texttospeech.googleapis.com`, also allow `us-texttospeech.googleapis.com` or `eu-texttospeech.googleapis.com` before you upgrade a Chirp deployment with a US or EU `vertex_location`.
+:::
+
+### Voice Mapping
+
+Linten maps OpenAI voice names to Google Cloud voices. You can use either OpenAI voices or Google Cloud voices directly.
+
+| OpenAI Voice | Google Cloud Voice |
+|-------------|-------------------|
+| `alloy` | en-US-Studio-O |
+| `echo` | en-US-Studio-M |
+| `fable` | en-GB-Studio-B |
+| `onyx` | en-US-Wavenet-D |
+| `nova` | en-US-Studio-O |
+| `shimmer` | en-US-Wavenet-F |
+
+### Using Google Cloud Voices Directly
+
+#### Linten Python SDK
+
+```python showLineNumbers title="Chirp3 HD Voice"
+from linten import speech
+
+# Pass Chirp3 HD voice name directly
+response = speech(
+    model="vertex_ai/chirp",
+    voice="en-US-Chirp3-HD-Charon",
+    input="Hello with a Chirp3 HD voice",
+    vertex_project="your-project-id",
+)
+response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Voice as Dict (Multilingual)"
+from linten import speech
+
+# Pass as dict for full control over language and voice
+response = speech(
+    model="vertex_ai/chirp",
+    voice={
+        "languageCode": "de-DE",
+        "name": "de-DE-Chirp3-HD-Charon",
+    },
+    input="Hallo, dies ist ein Test",
+    vertex_project="your-project-id",
+)
+response.stream_to_file("speech.mp3")
+```
+
+#### Linten AI Gateway
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Chirp3 HD Voice"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-tts",
+    "voice": "en-US-Chirp3-HD-Charon",
+    "input": "Hello with a Chirp3 HD voice"
+  }' \
+  --output speech.mp3
+```
+
+```bash showLineNumbers title="Voice as Dict (Multilingual)"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-tts",
+    "voice": {"languageCode": "de-DE", "name": "de-DE-Chirp3-HD-Charon"},
+    "input": "Hallo, dies ist ein Test"
+  }' \
+  --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Chirp3 HD Voice"
+import openai
+
+client = openai.OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="en-US-Chirp3-HD-Charon",
+    input="Hello with a Chirp3 HD voice",
+)
+response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Voice as Dict (Multilingual)"
+import openai
+
+client = openai.OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice={"languageCode": "de-DE", "name": "de-DE-Chirp3-HD-Charon"},
+    input="Hallo, dies ist ein Test",
+)
+response.stream_to_file("speech.mp3")
+```
+
+</TabItem>
+</Tabs>
+
+Browse available voices: [Google Cloud Text-to-Speech Console](https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech)
+
+### Passing Raw SSML
+
+Linten auto-detects SSML when your input contains `<speak>` tags and passes it through unchanged.
+
+#### Linten Python SDK
+
+```python showLineNumbers title="SSML Input"
+from linten import speech
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+response = speech(
+    model="vertex_ai/chirp",
+    voice="en-US-Studio-O",
+    input=ssml,  # Auto-detected as SSML
+    vertex_project="your-project-id",
+)
+response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Force SSML Mode"
+from linten import speech
+
+# Force SSML mode with use_ssml=True
+response = speech(
+    model="vertex_ai/chirp",
+    voice="en-US-Studio-O",
+    input="<speak><prosody rate='slow'>Speaking slowly</prosody></speak>",
+    use_ssml=True,
+    vertex_project="your-project-id",
+)
+response.stream_to_file("speech.mp3")
+```
+
+#### Linten AI Gateway
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="SSML Input"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-tts",
+    "voice": "en-US-Studio-O",
+    "input": "<speak><p>Hello!</p><break time=\"500ms\"/><p>How are you?</p></speak>"
+  }' \
+  --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="SSML Input"
+import openai
+
+client = openai.OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://0.0.0.0:4000")
+
+ssml = """<speak><p>Hello!</p><break time="500ms"/><p>How are you?</p></speak>"""
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="en-US-Studio-O",
+    input=ssml,
+)
+response.stream_to_file("speech.mp3")
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Parameters
+
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| `voice` | Voice selection | OpenAI voice, Google Cloud voice name, or dict |
+| `input` | Text to convert | Plain text or SSML |
+| `speed` | Speaking rate | 0.25 to 4.0 (default: 1.0) |
+| `response_format` | Audio format | `mp3`, `opus`, `wav`, `pcm`, `flac` |
+| `use_ssml` | Force SSML mode | `True` / `False` |
+
+### Async Usage
+
+```python showLineNumbers title="Async Speech Generation"
+import asyncio
+from linten import aspeech
+
+async def main():
+    response = await aspeech(
+        model="vertex_ai/chirp",
+        voice="alloy",
+        input="Hello from async",
+        vertex_project="your-project-id",
+    )
+    response.stream_to_file("speech.mp3")
+
+asyncio.run(main())
+```
+
+---
+
+## Gemini TTS
+
+Gemini models with audio output capabilities using the chat completions API.
+
+The Voice Mapping table above is for Chirp. For Gemini TTS, pass a Gemini prebuilt voice name such as `Kore`, or from v1.107.0 an OpenAI voice name, which maps to a Gemini voice as listed in the [Gemini provider docs](./gemini#voice-names).
+
+:::warning
+**Limitations:**
+- Only supports `pcm16` audio format
+- Streaming not yet supported
+- Must set `modalities: ["audio"]`
+- When using via Linten Proxy, must include `"allowed_openai_params": ["audio", "modalities"]` in the request body to enable audio parameters
+:::
+
+### Quick Start
+
+#### Linten Python SDK
+
+```python showLineNumbers title="Gemini TTS Quick Start"
+from linten import completion
+import json
+
+# Load credentials
+with open('path/to/service_account.json', 'r') as file:
+    vertex_credentials = json.dumps(json.load(file))
+
+response = completion(
+    model="vertex_ai/gemini-2.5-flash-preview-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],
+    audio={
+        "voice": "Kore",
+        "format": "pcm16"
+    },
+    vertex_credentials=vertex_credentials
+)
+print(response)
+```
+
+#### Linten AI Gateway
+
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gemini-tts
+    linten_params:
+      model: vertex_ai/gemini-2.5-flash-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+**2. Start the proxy**
+
+```bash title="Start Linten Proxy"
+linten --config /path/to/config.yaml
+```
+
+**3. Make requests**
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Gemini TTS Request"
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "gemini-tts",
+    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
+    "modalities": ["audio"],
+    "audio": {"voice": "Kore", "format": "pcm16"},
+    "allowed_openai_params": ["audio", "modalities"]
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Gemini TTS Request"
+import openai
+
+client = openai.OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://0.0.0.0:4000")
+
+response = client.chat.completions.create(
+    model="gemini-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],
+    audio={"voice": "Kore", "format": "pcm16"},
+    extra_body={"allowed_openai_params": ["audio", "modalities"]}
+)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Models
+
+- `vertex_ai/gemini-2.5-flash-preview-tts`
+- `vertex_ai/gemini-2.5-pro-preview-tts`
+
+See [Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation) for available voices.
+
+### Advanced Usage
+
+```python showLineNumbers title="Gemini TTS with System Prompt"
+from linten import completion
+
+response = completion(
+    model="vertex_ai/gemini-2.5-pro-preview-tts",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
+        {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    modalities=["audio"],
+    audio={"voice": "Charon", "format": "pcm16"},
+    temperature=0.7,
+    max_tokens=150,
+    vertex_credentials=vertex_credentials
+)
+```

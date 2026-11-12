@@ -1,0 +1,83 @@
+# Request Headers
+
+Special headers that are supported by Linten.
+
+## Header Forwarding
+
+By default, Linten does not forward client headers to LLM provider APIs. However, you can selectively enable header forwarding for specific model groups. [Learn more about configuring header forwarding](./forward_client_headers.md).
+
+## Linten Headers
+
+`x-linten-timeout` Optional[float]: The timeout for the request in seconds.
+
+`x-linten-priority` Optional[int]: The [scheduler](../scheduler#priority-header) queue priority for the request. Lower values run first. This outranks a `priority` in the request body. <SinceVersion v="1.109.0" />
+
+`x-linten-stream-timeout` Optional[float]: The timeout for getting the first chunk of the response in seconds (only applies for streaming requests). [Demo Video](https://www.loom.com/share/8da67e4845ce431a98c901d4e45db0e5)
+
+`x-linten-enable-message-redaction`: Optional[bool]: Don't log the message content to logging integrations. Just track spend. [Learn More](./logging#redact-messages-response-content)
+
+`x-linten-tags`: Optional[str]: A comma separated list (e.g. `tag1,tag2,tag3`) of tags to use for [tag-based routing](./tag_routing) **OR** [spend-tracking](/docs/proxy/cost_tracking#custom-tags).
+
+`x-linten-num-retries`: Optional[int]: The number of retries for the request. This outranks a `num_retries` in the request body, in a deployment's `linten_params`, and in `linten_settings`. [Learn More](../routing#where-num_retries-can-be-set-and-which-one-wins)
+
+`x-linten-keepalive-seconds`: Optional[float]: Emit an SSE `: ping` comment frame after this many seconds of stream silence, to keep idle-looking connections alive through load balancer timeouts. Subject to the deployment's `allow_client_keepalive_override` setting; has no effect if the deployment hasn't opted in. [Learn More](./timeout#keepalive-pings-for-idle-streaming-connections)
+
+`x-linten-include-cost-in-streaming-usage`: Optional[bool]: Add `cost` to the usage-carrying event of this one stream (`/v1/messages`, Anthropic and OpenAI pass-throughs) without turning on `linten_settings.include_cost_in_streaming_usage` for every request. [Learn More](../completion/usage#proxy-include-cost-in-streaming-usage) <SinceVersion v="1.110.0" />
+
+`x-linten-spend-logs-metadata`: Optional[str]: JSON string containing custom metadata to include in spend logs. Example: `{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}`. [Learn More](./cost_tracking)
+
+`x-linten-customer-id`: Optional[str]: Standard header for passing a customer/end-user ID. Always checked without any configuration. [Learn More](./customers)
+
+`x-linten-end-user-id`: Optional[str]: Standard header for passing a customer/end-user ID. Always checked without any configuration. [Learn More](./customers)
+
+`x-linten-trace-id` Optional[str]: A stable id used to correlate all LLM calls belonging to one conversation or agentic flow. The value is stored in the `session_id` column of the `Linten_SpendLogs` table and in request metadata (`trace_id` and `session_id`), and it propagates to nested MCP tool calls and A2A agent calls so inner LLM calls share the same session id. Highest priority of the three headers.
+
+`x-linten-session-id` Optional[str]: Same behavior as `x-linten-trace-id`. Used if `x-linten-trace-id` is not present. The two headers are interchangeable and set the same chain id.
+
+`x-<vendor>-session-id` Optional[str]: Fallback pattern. Any header matching `x-<vendor>-session-id` (for example `x-claude-code-session-id`) is auto-detected as the session id if neither explicit Linten header is present. The value must look like a session id: alphanumeric characters, hyphens, or underscores, at least 8 characters long.
+
+Linten resolves the session id in a fixed priority order: `x-linten-trace-id` first, then `x-linten-session-id`, then any `x-<vendor>-session-id` header. The first match wins, and the resolved value becomes the chain id shared across the request and any nested MCP or A2A calls it triggers.
+
+### Session correlation example
+
+Send two chat completion requests with the same `x-linten-trace-id` value to group them into one session:
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "x-linten-trace-id: my-conversation-123" \
+  -d '{
+    "model": "{{openai_large}}",
+    "messages": [{"role": "user", "content": "Hello, who won the world cup in 2022?"}]
+  }'
+
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "x-linten-trace-id: my-conversation-123" \
+  -d '{
+    "model": "{{openai_large}}",
+    "messages": [{"role": "user", "content": "And who was the top scorer?"}]
+  }'
+```
+
+All requests sharing that value can be found by querying spend logs by session id, or through the session grouping in the Admin UI logs page.
+
+## Anthropic Headers
+
+`anthropic-version` Optional[str]: The version of the Anthropic API to use.  
+`anthropic-beta` Optional[str]: The beta version of the Anthropic API to use.
+    - For `/v1/messages` endpoint, this will always be forward the header to the underlying model.
+    - For `/chat/completions` endpoint, this will only be forwarded if the model is configured in `forward_client_headers_to_llm_api`. [Learn more](./forward_client_headers.md)
+
+## OpenAI Headers
+
+`openai-organization` Optional[str]: The organization to use for the OpenAI API. (currently needs to be enabled via `general_settings::forward_openai_org_id: true`)
+
+## Custom Headers
+
+Custom headers starting with `x-` can be forwarded to LLM provider APIs when the model is configured in `forward_client_headers_to_llm_api`. [Learn more about header forwarding configuration](./forward_client_headers.md).
+
+
+

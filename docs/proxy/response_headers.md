@@ -1,0 +1,130 @@
+# Response Headers
+
+When you make a request to the proxy, the proxy will return the following headers:
+
+## Rate Limit Headers
+[OpenAI-compatible headers](https://platform.openai.com/docs/guides/rate-limits/rate-limits-in-headers):
+
+| Header | Type | Description |
+|--------|------|-------------|
+| `x-ratelimit-remaining-requests` | Optional[int] | The remaining number of requests that are permitted before exhausting the rate limit |
+| `x-ratelimit-remaining-tokens` | Optional[int] | The remaining number of tokens that are permitted before exhausting the rate limit |
+| `x-ratelimit-limit-requests` | Optional[int] | The maximum number of requests that are permitted before exhausting the rate limit |
+| `x-ratelimit-limit-tokens` | Optional[int] | The maximum number of tokens that are permitted before exhausting the rate limit |
+| `x-ratelimit-reset-requests` | Optional[int] | The time at which the rate limit will reset |
+| `x-ratelimit-reset-tokens` | Optional[int] | The time at which the rate limit will reset |
+
+### How Rate Limit Headers work
+
+**If key has rate limits set**
+
+The proxy will return the [remaining rate limits for that key](https://github.com/LintenAI/linten/blob/bfa95538190575f7f317db2d9598fc9a82275492/linten/proxy/hooks/parallel_request_limiter.py#L778).
+
+**If key does not have rate limits set**
+
+The proxy returns the remaining requests/tokens returned by the backend provider. (Linten will standardize the backend provider's response headers to match the OpenAI format)
+
+If the backend provider does not return these headers, the value will be `None`.
+
+These headers are useful for clients to understand the current rate limit status and adjust their request rate accordingly.
+
+
+## Latency Headers
+| Header | Type | Description |
+|--------|------|-------------|
+| `x-linten-response-duration-ms` | float | Total duration from the moment that a request gets to Linten Proxy to the moment it gets returned to the client. |
+| `x-linten-overhead-duration-ms` | float | Linten processing overhead in milliseconds |
+
+## Retry, Fallback Headers
+| Header | Type | Description |
+|--------|------|-------------|
+| `x-linten-attempted-retries` | int | Number of retry attempts made |
+| `x-linten-max-retries` | int | Configured `num_retries`, only sent when at least one retry was attempted |
+| `x-linten-attempted-fallbacks` | int | Number of fallback attempts made |
+| `x-linten-fallback-reason` | string | Why the proxy left the requested model, only sent when a local rate limit caused the fallback. `rate_limit:<scope>`, where the scope is the limit that rejected the requested model, for example `rate_limit:model_per_key` or `rate_limit:model_per_end_user` |
+
+`max_fallbacks` is not returned as a response header
+
+## Cost Tracking Headers
+| Header | Type | Description | Available on Pass-Through Endpoints |
+|--------|------|-------------|-------------|
+| `x-linten-response-cost` | float | Cost of the API call | |
+| `x-linten-response-cost-input` | float | Uncached input cost component | |
+| `x-linten-response-cost-output` | float | Output cost component, reasoning included | |
+| `x-linten-response-cost-cache-read` | float | Prompt cache read cost component | |
+| `x-linten-response-cost-cache-creation` | float | Prompt cache write cost component | |
+| `x-linten-response-cost-reasoning` | float | Reasoning cost, a subset of the output component | |
+| `x-linten-response-cost-tool-usage` | float | Built-in tool cost component | |
+| `x-linten-key-spend` | float | Total spend for the API key | ✅ |
+
+The component headers sum to the total: input + cache read + cache creation + output + tool usage = `x-linten-response-cost`. Reasoning is already inside output, so exclude it from the sum. The cache and reasoning headers appear only when those costs are nonzero, and component headers appear on non-streaming responses only
+
+## Linten Specific Headers
+| Header | Type | Description | Available on Pass-Through Endpoints |
+|--------|------|-------------|-------------|
+| `x-linten-call-id` | string | Id for this request. With `general_settings.include_call_id_in_error_body: true` it is also inside JSON error bodies as `linten_call_id` ([details](./error_reference.md#reporting-a-problem)) | ✅ |
+| `x-linten-model-id` | string | Deployment id (`model_info.id`) | |
+| `x-linten-model-api-base` | string | API base URL | ✅ |
+| `x-linten-version` | string | Linten version | |
+| `x-linten-model-group` | string | Routed `model_list[].model_name` (client `model`) | |
+
+### Example
+
+```yaml
+model_list:
+  - model_name: my-chat-model          # clients call this
+    linten_params:
+      model: {{openai_small}}               # Linten calls this upstream
+    model_info:
+      id: "7c9f2a1b3d8e4f0a2c6b5d9e1f3a7b8c"   # optional; auto-generated if omitted
+```
+
+| Header | Example | Notes |
+|--------|---------|-------|
+| `x-linten-model-group` | `my-chat-model` | `model_name` / request `model`; not `linten_params.model`. |
+| `x-linten-model-id` | `7c9f2a1b3d8e4f0a2c6b5d9e1f3a7b8c` | Which deployment row; use with `/v1/model/info?linten_model_id=...`. |
+| Response body `model` | often `my-chat-model` | Often restamped to match the client; upstream id stays in config. |
+
+### Auto-routed requests
+
+For a request to an [auto router](./auto_routing.md), the body `model` is the router alias the client called and the headers above still name the deployment that answered. Clients that cannot read response headers, including streaming consumers, can set `return_raw_model_name` on the router to get the picked tier in the body `model` field instead; see [reading the picked model from the response](./auto_routing.md#reading-the-picked-model-from-the-response).
+
+Complexity auto routers also return the recorded routing decision as response headers:
+
+| Header | Type | Description |
+|--------|------|-------------|
+| `x-linten-complexity-router-tier` | string | Selected complexity tier |
+| `x-linten-complexity-router-cause` | string | Routing mechanism that selected the tier, such as `heuristic_scorer`, `heuristic_v2`, `llm_classifier`, or a keyword rule |
+| `x-linten-complexity-router-score` | float | Recorded heuristic score |
+| `x-linten-complexity-router-reasoning-effort` | string | `reasoning_effort` configured on the selected tier |
+
+Each header appears only when its value is present in the recorded routing decision for the successful attempt. The score is absent on routes that do not record one, including keyword and LLM-classifier decisions. The reasoning-effort header reports the selected tier's configured override; it does not report the model's default effort or the classifier model's reasoning effort. Invalid or non-ASCII text values are omitted. Raw heuristic signals, matched keywords, and the complete tier parameter map are not exposed
+
+These headers are available on streaming and non-streaming requests to `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`. They are absent after a fallback to a plain model group. HTTP headers cannot change after a stream commits
+
+### More examples (illustrative)
+
+| Header | Example | Meaning |
+|--------|---------|---------|
+| `x-linten-response-cost` | `0.000214` | This call (USD). |
+| `x-linten-key-spend` | `12.847` | Key total after this call. |
+| `x-linten-response-duration-ms` | `842.3` | Proxy end-to-end (ms). |
+| `x-linten-overhead-duration-ms` | `15.1` | Linten overhead (ms). |
+| `x-linten-attempted-retries` | `0` | Retries. |
+| `x-linten-attempted-fallbacks` | `1` | Fallbacks to another deployment. |
+| `x-linten-call-id` | `019b2c4d-e5f6-7890-abcd-ef1234567890` | Logs / tracing. |
+| `x-linten-version` | `1.55.3` {/* keep-version-note */} | Version. |
+| `x-linten-model-api-base` | `https://api.openai.com/v1` | Provider base (no query string). |
+
+## Response headers from LLM providers
+
+Linten also returns the original response headers from the LLM provider. These headers are prefixed with `llm_provider-` to distinguish them from Linten's headers.
+
+Example response headers:
+```
+llm_provider-openai-processing-ms: 256
+llm_provider-openai-version: 2020-10-01
+llm_provider-x-ratelimit-limit-requests: 30000
+llm_provider-x-ratelimit-limit-tokens: 150000000
+```
+

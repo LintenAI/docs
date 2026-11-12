@@ -1,0 +1,687 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import SinceVersion from '@site/src/components/SinceVersion';
+
+# /v1/messages
+
+Use Linten to call all your LLM APIs in the Anthropic `v1/messages` format. 
+
+
+## Overview 
+
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Streaming | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input and output text. On streamed output a guardrail can block the response, but text rewrites such as masking only apply to non-streaming responses |
+| Supported Providers | **All Linten supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai`, etc. |
+
+## Usage 
+---
+
+### Linten Python SDK 
+
+<Tabs>
+<TabItem value="anthropic" label="Anthropic">
+
+#### Non-streaming example
+```python showLineNumbers title="Anthropic Example using Linten Python SDK"
+import linten
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    api_key=api_key,
+    model="anthropic/{{anthropic}}",
+    max_tokens=100,
+)
+```
+
+#### Streaming example
+```python showLineNumbers title="Anthropic Streaming Example using Linten Python SDK"
+import linten
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    api_key=api_key,
+    model="anthropic/{{anthropic}}",
+    max_tokens=100,
+    stream=True,
+)
+async for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI">
+
+#### Non-streaming example
+```python showLineNumbers title="OpenAI Example using Linten Python SDK"
+import linten
+import os
+
+# Set API key
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="openai/{{openai_large}}",
+    max_tokens=100,
+)
+```
+
+#### Streaming example
+```python showLineNumbers title="OpenAI Streaming Example using Linten Python SDK"
+import linten
+import os
+
+# Set API key
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="openai/{{openai_large}}",
+    max_tokens=100,
+    stream=True,
+)
+async for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Google AI Studio">
+
+#### Non-streaming example
+```python showLineNumbers title="Google Gemini Example using Linten Python SDK"
+import linten
+import os
+
+# Set API key
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="gemini/{{gemini_flash}}",
+    max_tokens=100,
+)
+```
+
+#### Streaming example
+```python showLineNumbers title="Google Gemini Streaming Example using Linten Python SDK"
+import linten
+import os
+
+# Set API key
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="gemini/{{gemini_flash}}",
+    max_tokens=100,
+    stream=True,
+)
+async for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="Vertex AI">
+
+#### Non-streaming example
+```python showLineNumbers title="Vertex AI Example using Linten Python SDK"
+import linten
+import os
+
+# Set credentials - Vertex AI uses application default credentials
+# Run 'gcloud auth application-default login' to authenticate
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="vertex_ai/{{gemini_flash}}",
+    max_tokens=100,
+)
+```
+
+#### Streaming example
+```python showLineNumbers title="Vertex AI Streaming Example using Linten Python SDK"
+import linten
+import os
+
+# Set credentials - Vertex AI uses application default credentials
+# Run 'gcloud auth application-default login' to authenticate
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="vertex_ai/{{gemini_flash}}",
+    max_tokens=100,
+    stream=True,
+)
+async for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+
+<TabItem value="bedrock" label="AWS Bedrock">
+
+#### Non-streaming example
+```python showLineNumbers title="AWS Bedrock Example using Linten Python SDK"
+import linten
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-access-key-id"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-secret-access-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"  # or your AWS region
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="bedrock/us.anthropic.{{anthropic}}",
+    max_tokens=100,
+)
+```
+
+#### Streaming example
+```python showLineNumbers title="AWS Bedrock Streaming Example using Linten Python SDK"
+import linten
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-access-key-id"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-secret-access-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"  # or your AWS region
+
+response = await linten.anthropic.messages.acreate(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="bedrock/us.anthropic.{{anthropic}}",
+    max_tokens=100,
+    stream=True,
+)
+async for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+</Tabs>
+
+Example response:
+```json
+{
+  "content": [
+    {
+      "text": "Hi! this is a very short joke",
+      "type": "text"
+    }
+  ],
+  "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+  "model": "{{anthropic}}",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 2095,
+    "output_tokens": 503,
+    "cache_creation_input_tokens": 2095,
+    "cache_read_input_tokens": 0
+  }
+}
+```
+
+### Linten Proxy Server 
+
+<Tabs>
+<TabItem value="anthropic-proxy" label="Anthropic">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      linten_params:
+        model: {{anthropic}}
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers title="Anthropic Example using Linten Proxy Server"
+import anthropic
+
+# point anthropic sdk to linten proxy 
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+response = client.messages.create(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="anthropic-claude",
+    max_tokens=100,
+)
+```
+
+</TabItem>
+
+<TabItem value="openai-proxy" label="OpenAI">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: openai-gpt4
+      linten_params:
+        model: openai/{{openai_large}}
+        api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers title="OpenAI Example using Linten Proxy Server"
+import anthropic
+
+# point anthropic sdk to linten proxy 
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+response = client.messages.create(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="openai-gpt4",
+    max_tokens=100,
+)
+```
+
+</TabItem>
+
+<TabItem value="gemini-proxy" label="Google AI Studio">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gemini-2-flash
+      linten_params:
+        model: gemini/{{gemini_flash}}
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers title="Google Gemini Example using Linten Proxy Server"
+import anthropic
+
+# point anthropic sdk to linten proxy 
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+response = client.messages.create(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="gemini-2-flash",
+    max_tokens=100,
+)
+```
+
+</TabItem>
+
+<TabItem value="vertex-proxy" label="Vertex AI">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: vertex-gemini
+      linten_params:
+        model: vertex_ai/{{gemini_flash}}
+        vertex_project: your-gcp-project-id
+        vertex_location: us-central1
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers title="Vertex AI Example using Linten Proxy Server"
+import anthropic
+
+# point anthropic sdk to linten proxy 
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+response = client.messages.create(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="vertex-gemini",
+    max_tokens=100,
+)
+```
+
+</TabItem>
+
+<TabItem value="bedrock-proxy" label="AWS Bedrock">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: bedrock-claude
+      linten_params:
+        model: bedrock/us.anthropic.{{anthropic}}
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: us-west-2
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers title="AWS Bedrock Example using Linten Proxy Server"
+import anthropic
+
+# point anthropic sdk to linten proxy 
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+response = client.messages.create(
+    messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+    model="bedrock-claude",
+    max_tokens=100,
+)
+```
+
+</TabItem>
+
+<TabItem value="curl-proxy" label="curl">
+
+```bash showLineNumbers title="Example using Linten Proxy Server"
+curl -L -X POST 'http://0.0.0.0:4000/v1/messages' \
+-H 'content-type: application/json' \
+-H "x-api-key: $LINTEN_API_KEY" \
+-H 'anthropic-version: 2023-06-01' \
+-d '{
+  "model": "anthropic-claude",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, can you tell me a short joke?"
+    }
+  ],
+  "max_tokens": 100
+}'
+```
+
+</TabItem>
+</Tabs>
+
+## Message threads (beta)
+
+Anthropic [message threads](https://platform.claude.com/docs/en/build-with-claude/message-threads) keep the conversation on Anthropic's servers between turns. The first request creates the thread with the full prompt, and each later request sends only the new messages plus the `id` of the previous response, so the model starts answering sooner and you stop paying to resend history. <SinceVersion v="1.111.0" />
+
+Linten forwards the `thread` body field on native Anthropic deployments (`anthropic/`, Microsoft Foundry `azure_ai/` Claude deployments, and Claude Platform on AWS `bedrock/claude_platform/` deployments), adds the `message-threads-2026-08-12` beta header for you, and returns the response `id` unchanged, so the id a client gets from the proxy is the one it continues from. Streaming works the same way.
+
+Create the thread with the full prompt:
+
+```bash
+curl -X POST http://0.0.0.0:4000/v1/messages \
+  -H "x-api-key: $LINTEN_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5-5",
+    "max_tokens": 1024,
+    "system": "You are a terse assistant.",
+    "messages": [{"role": "user", "content": "My name is Ada."}],
+    "thread": {"type": "create"}
+  }'
+```
+
+Continue it with only the new messages and the `id` of the response you just got. A continue request must not carry `system` or `tools`, since the thread already stores them:
+
+```bash
+curl -X POST http://0.0.0.0:4000/v1/messages \
+  -H "x-api-key: $LINTEN_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5-5",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "What is my name?"}],
+    "thread": {"type": "continue", "previous_message_id": "msg_01XFDUDYJgAACzvnptvVoYEL"}
+  }'
+```
+
+The Anthropic SDK thread helpers (`client.beta.messages.threads` in the Python and TypeScript SDKs) work through the proxy as they do against Anthropic directly. When Anthropic cannot continue a thread it answers a 404 with `error.details.error_code` set to `thread_not_found`, and the proxy relays that status and code, so the helper's replay of the full conversation keeps working.
+
+On a deployment without native thread support, which is every translated provider such as `openai/`, Bedrock and Vertex AI, and any deployment whose `model_info.supported_endpoints` forwards `/v1/messages` to an OpenAI-compatible server, a create request gets a 400 with `error.details.error_code` set to `thread_unsupported_request` before any upstream call, the same answer Anthropic gives a request it cannot thread. The SDK thread helpers created with `unsupported_request_behavior="continue_unthreaded"` then send the conversation without a thread. With `drop_params` on, Linten instead serves the create without the thread and logs a warning:
+
+```yaml
+linten_settings:
+  drop_params: true
+```
+
+A continue request on such a deployment always gets the 404 `thread_not_found` before any upstream call, so the SDK thread helpers replay the full conversation instead of getting an answer that ignores the earlier turns.
+
+Every key on the proxy shares the deployment's Anthropic credential, so Linten binds each thread response `id` to the virtual key that received it, or to the signed-in user, team, end user, org and agent when the request has no key. A continue from another key gets the 404 `thread_not_found` on every route, and the SDK helper starts a new thread with the full conversation. On `/v1/messages`, `/v1/chat/completions` and `/v1/responses`, a continue naming an `id` this proxy never returned in a thread gets the same 404, so a thread started outside the proxy or on a pass-through route cannot be continued there. Only threads started on `/v1/messages` are bound, so pass-through routes such as `/anthropic/v1/messages`, which forward requests with the deployment's credential, forward an `id` the proxy never bound as it is. The first key to receive an `id` keeps it, so a response cache hit that returns the same `id` to another key does not hand the thread over. A binding lasts one hour, longer than Anthropic keeps an idle thread.
+
+With several proxy workers or pods, configure Redis for the proxy so every worker sees the bindings. Without it, a continue that reaches another worker gets the 404 and the SDK helper replays the conversation. Setting the Redis environment variables is enough:
+
+```bash
+export REDIS_HOST=redis.internal
+export REDIS_PORT=6379
+export REDIS_PASSWORD=<your-redis-password>
+linten --config config.yaml --num_workers 4
+```
+
+A model group with several deployments can send a continue to a deployment whose Anthropic credential cannot see the thread, which answers the 404 `thread_not_found` and makes the SDK helper replay the conversation. Turn on deployment affinity so each key keeps reaching the deployment that created its threads:
+
+```yaml
+router_settings:
+  optional_pre_call_checks: ["deployment_affinity"]
+```
+
+The set of `anthropic-beta` values is one of the fixed fields of a thread, and Anthropic rejects a turn whose set differs from the create request with `thread_fingerprint_mismatch`. A create request still gets the beta headers Linten adds based on its `tools` and `messages`, such as the advisor tool's. The proxy stores the full set the create sent with the thread binding and adds it to every continue on `/v1/messages`, `/v1/chat/completions` and `/v1/responses`, so a continue matches its create without you sending those headers. When you call the Linten Python SDK directly, with no proxy, nothing stores that set, so send the create's beta headers yourself on every continue.
+
+## Request Format
+---
+
+Request body will be in the Anthropic messages API format. **linten follows the Anthropic messages specification for this endpoint.**
+
+#### Example request body
+
+```json
+{
+  "model": "{{anthropic}}",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, world"
+    }
+  ]
+}
+```
+
+#### Required Fields
+- **model** (string):  
+  The model identifier (e.g., `"{{anthropic}}"`).
+- **max_tokens** (integer):  
+  The maximum number of tokens to generate before stopping.  
+  _Note: The model may stop before reaching this limit; value must be greater than 1._
+- **messages** (array of objects):  
+  An ordered list of conversational turns.  
+  Each message object must include:
+  - **role** (enum: `"user"` or `"assistant"`):  
+    Specifies the speaker of the message.
+  - **content** (string or array of content blocks):  
+    The text or content blocks (e.g., an array containing objects with a `type` such as `"text"`) that form the message.  
+    _Example equivalence:_
+    ```json
+    {"role": "user", "content": "Hello, Claude"}
+    ```
+    is equivalent to:
+    ```json
+    {"role": "user", "content": [{"type": "text", "text": "Hello, Claude"}]}
+    ```
+
+#### Optional Fields
+- **metadata** (object):  
+  Contains additional metadata about the request (e.g., `user_id` as an opaque identifier).
+- **stop_sequences** (array of strings):  
+  Custom sequences that, when encountered in the generated text, cause the model to stop.
+- **stream** (boolean):  
+  Indicates whether to stream the response using server-sent events.
+- **system** (string or array):  
+  A system prompt providing context or specific instructions to the model.
+- **temperature** (number):  
+  Controls randomness in the model's responses. Valid range: `0 < temperature < 1`.
+- **thinking** (object):
+  Configuration for enabling extended thinking. If enabled, it includes:
+  - **budget_tokens** (integer):
+    Minimum of 1024 tokens (and less than `max_tokens`).
+  - **type** (enum):
+    E.g., `"enabled"`.
+  - **summary** (string, optional):
+    Enables the summary style for thinking blocks. Possible values: `"auto"`, `"concise"`, `"detailed"`, `"disabled"`.
+    When routing to non-Anthropic providers (e.g., `openai/{{openai_large}}`), the `summary` value is preserved and forwarded to the downstream API.
+- **tool_choice** (object):  
+  Instructs how the model should use any provided tools.
+- **tools** (array of objects):  
+  Definitions for tools available to the model. Each tool includes:
+  - **name** (string):  
+    The tool's name.
+  - **description** (string):  
+    A detailed description of the tool.
+  - **input_schema** (object):  
+    A JSON schema describing the expected input format for the tool.
+- **top_k** (integer):  
+  Limits sampling to the top K options.
+- **top_p** (number):  
+  Enables nucleus sampling with a cumulative probability cutoff. Valid range: `0 < top_p < 1`.
+
+
+## Response Format
+---
+
+Responses will be in the Anthropic messages API format.
+
+#### Example Response
+
+```json
+{
+  "content": [
+    {
+      "text": "Hi! My name is Claude.",
+      "type": "text"
+    }
+  ],
+  "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+  "model": "{{anthropic}}",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 2095,
+    "output_tokens": 503,
+    "cache_creation_input_tokens": 2095,
+    "cache_read_input_tokens": 0
+  }
+}
+```
+
+#### Response fields
+
+- **content** (array of objects):  
+  Contains the generated content blocks from the model. Each block includes:
+  - **type** (string):  
+    Indicates the type of content (e.g., `"text"`, `"tool_use"`, `"thinking"`, or `"redacted_thinking"`).
+  - **text** (string):  
+    The generated text from the model.  
+    _Note: Maximum length is 5,000,000 characters._
+  - **citations** (array of objects or `null`):  
+    Optional field providing citation details. Each citation includes:
+    - **cited_text** (string):  
+      The excerpt being cited.
+    - **document_index** (integer):  
+      An index referencing the cited document.
+    - **document_title** (string or `null`):  
+      The title of the cited document.
+    - **start_char_index** (integer):  
+      The starting character index for the citation.
+    - **end_char_index** (integer):  
+      The ending character index for the citation.
+    - **type** (string):  
+      Typically `"char_location"`.
+
+- **id** (string):  
+  A unique identifier for the response message.  
+  _Note: The format and length of IDs may change over time._
+
+- **model** (string):  
+  Specifies the model that generated the response.
+
+- **role** (string):  
+  Indicates the role of the generated message. For responses, this is always `"assistant"`.
+
+- **stop_reason** (string):  
+  Explains why the model stopped generating text. Possible values include:
+  - `"end_turn"`: The model reached a natural stopping point.
+  - `"max_tokens"`: The generation stopped because the maximum token limit was reached.
+  - `"stop_sequence"`: A custom stop sequence was encountered.
+  - `"tool_use"`: The model invoked one or more tools.
+
+- **stop_sequence** (string or `null`):  
+  Contains the specific stop sequence that caused the generation to halt, if applicable; otherwise, it is `null`.
+
+- **type** (string):  
+  Denotes the type of response object, which is always `"message"`.
+
+- **usage** (object):  
+  Provides details on token usage for billing and rate limiting. This includes:
+  - **input_tokens** (integer):  
+    Total number of input tokens processed.
+  - **output_tokens** (integer):  
+    Total number of output tokens generated.
+  - **cache_creation_input_tokens** (integer or `null`):  
+    Number of tokens used to create a cache entry.
+  - **cache_read_input_tokens** (integer or `null`):  
+    Number of tokens read from the cache.

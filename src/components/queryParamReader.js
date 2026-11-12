@@ -1,0 +1,60 @@
+import React, { useState, useEffect } from 'react';
+import docsModels from '../../docs-models.json';
+
+const CodeBlock = ({ token }) => {
+  const codeWithToken = `
+import os
+from linten import completion
+
+# set ENV variables 
+os.environ["LINTEN_TOKEN"] = '${token}'
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion(model="${docsModels.openai_small}", messages=messages)
+
+# cohere call
+response = completion("command-nightly", messages)
+`;
+
+  const codeWithoutToken = `
+from linten import completion
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion(model="${docsModels.openai_small}", messages=messages)
+
+# cohere call
+response = completion("command-nightly", messages)
+`;
+  return (
+    <pre>
+      {token ? codeWithToken : codeWithoutToken}
+    </pre>
+  )
+}
+
+const QueryParamReader = () => {
+  const [token, setToken] = useState(null);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    setToken(token);
+  }, []);
+
+  return (
+    <div>
+      <CodeBlock token={token} />
+    </div>
+  );
+}
+
+export default QueryParamReader;

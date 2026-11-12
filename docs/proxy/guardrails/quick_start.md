@@ -1,0 +1,970 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Guardrails - Quick Start
+
+Setup Prompt Injection Detection, PII Masking on Linten Proxy (AI Gateway)
+
+To see where guardrails and the rest of the gateway stand against the OWASP Top 10 for LLM Applications 2026, read the [OWASP LLM Top 10 mapping](../security_owasp_llm_top10).
+
+## 1. Define guardrails on your Linten config.yaml
+
+Set your guardrails under the `guardrails` section
+
+```yaml
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: openai/{{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: general-guard
+    linten_params:
+      guardrail: cato_networks
+      mode: [pre_call, post_call]
+      api_key: os.environ/CATO_API_KEY
+      api_base: os.environ/CATO_API_BASE
+      default_on: true # Optional
+  
+  - guardrail_name: "aporia-pre-guard"
+    linten_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "during_call"
+      api_key: os.environ/APORIA_API_KEY_1
+      api_base: os.environ/APORIA_API_BASE_1
+  - guardrail_name: "aporia-post-guard"
+    linten_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+    guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
+
+# Example Presidio guardrail config with entity actions + confidence score thresholds
+  - guardrail_name: "presidio-pii"
+    linten_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "en"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        EMAIL_ADDRESS: "MASK"
+        US_SSN: "MASK"
+      presidio_score_thresholds:  # minimum confidence scores for keeping detections
+        CREDIT_CARD: 0.8
+        EMAIL_ADDRESS: 0.6
+
+# Example Pillar Security config via Generic Guardrail API
+  - guardrail_name: "pillar-security"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/linten
+      api_key: os.environ/PILLAR_API_KEY
+      additional_provider_specific_params:
+        plr_mask: true
+        plr_evidence: true
+        plr_scanners: true
+```
+
+For generic guardrail APIs you can also set **static headers** (`headers`: key/value sent on every request) and **dynamic headers** (`extra_headers`: list of client header names to forward). See [Generic Guardrail API - Static and dynamic headers](/docs/adding_provider/generic_guardrail_api#static-and-dynamic-headers).
+
+### Supported values for `mode` (Event Hooks)
+
+- `pre_call` Run **before** LLM call, on **input**
+- `post_call` Run **after** LLM call, on **input & output**
+- `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
+- `logging_only` Scan logged input and output after the call finishes, on the background logging worker, without changing the client response or adding latency to it. Support depends on the guardrail integration
+- A list of the supported values to run multiple modes, e.g. `mode: [pre_call, post_call]`
+
+### Run on streaming or non-streaming requests only with `stream_scope`
+
+A guardrail runs on both streaming and non-streaming requests by default. Set `stream_scope` under the guardrail's `linten_params` to choose which request shapes it evaluates:
+
+- `streaming` — run only when the client asked for a streamed response
+- `non_streaming` — run only for regular request/response calls
+- `both` — run on every request (the default, and the pre-existing behavior when `stream_scope` is unset)
+
+```yaml
+guardrails:
+  # runs only on streaming requests; non-streaming calls bypass the scan
+  - guardrail_name: "moderate-streams-only"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: post_call
+      stream_scope: streaming
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+
+  # runs only on non-streaming requests
+  - guardrail_name: "moderate-non-streams"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: post_call
+      stream_scope: non_streaming
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+```
+
+A guardrail configured with several modes (for example `mode: [pre_call, post_call]`) can scope each mode separately with a map. Keys are mode names; a mode left out of the map defaults to `both`:
+
+```yaml
+guardrails:
+  - guardrail_name: "scoped-by-mode"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      stream_scope:
+        pre_call: streaming
+        post_call: both
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+```
+
+The dashboard exposes the same control on the guardrail creation form as **Request shape**; each configured mode gets its own dropdown.
+
+<Image
+  img={require('../../../img/stream_scope_request_shape_ui.png')}
+  alt="Create guardrail form: Request shape control with the pre_call applies to dropdown set to Streaming only"
+  style={{ width: '100%', maxWidth: '900px', height: 'auto' }}
+/>
+
+The dropdown open, showing the three scope choices:
+
+<Image
+  img={require('../../../img/stream_scope_request_shape_closeup.png')}
+  alt="Closeup: the pre_call applies to dropdown open with Streaming and non-streaming, Streaming only, and Non-streaming only options"
+  style={{ width: '100%', maxWidth: '700px', height: 'auto' }}
+/>
+
+The stored guardrail's detail page shows the per-mode scope summary:
+
+<Image
+  img={require('../../../img/stream_scope_guardrail_detail_ui.png')}
+  alt="Guardrail detail page: per-mode stream scope summary showing pre_call Streaming only and post_call Streaming and non-streaming"
+  style={{ width: '100%', maxWidth: '900px', height: 'auto' }}
+/>
+
+Realtime audio input transcription counts as streaming, so a `streaming` scope also covers guardrails running on realtime transcription events, and a `non_streaming` scope excludes them.
+
+Bedrock pass-through requests report their streaming state from the invoked Bedrock action, so `stream_scope` gates them the same way as native routes.
+
+#### Validation
+
+A `stream_scope` value other than `streaming`, `non_streaming` or `both` (or a map whose keys are not mode names) is rejected with `422` on create and update. At startup, whether loaded from a config file or a stored database row, an invalid `stream_scope` is ignored with a warning log and the guardrail keeps running with the default `both` scope.
+
+### Observe only one direction with `logging_only_scope`
+
+A `logging_only` scan runs after the call finishes, inside the proxy's success logging on the background logging worker, so the client request never waits for it and its latency does not reach the response. The worker's `LOGGING_WORKER_CONCURRENCY`, `LOGGING_WORKER_MAX_TIME_PER_COROUTINE` and `LOGGING_WORKER_MAX_QUEUE_SIZE` settings in [config settings](/docs/proxy/config_settings) bound how many scans run at once and how long one request's logging may take.
+
+A `logging_only` guardrail observes the request and the response by default. Set `logging_only_scope` under the guardrail's `linten_params` to choose which direction the scan observes:
+
+- `input` — scan only the request
+- `output` — scan only the response
+- unset / `null` (default): scans both directions and keeps the pre-existing behavior, so existing deployments are unchanged
+
+`both` is not a value. Leaving the scope unset already scans both directions, and a `both` value is logged and ignored at startup and rejected with `422` on create and update.
+
+```yaml
+guardrails:
+  # unset (default): scans request and response, pre-existing behavior
+  - guardrail_name: "observe-default"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: logging_only
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+
+  # scans only the request
+  - guardrail_name: "observe-requests"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: logging_only
+      logging_only_scope: input
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+
+  # scans only the response
+  - guardrail_name: "observe-responses"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: logging_only
+      logging_only_scope: output
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+```
+
+The scan never blocks or changes the client call in any of these cases; each verdict, including a would-block verdict, is recorded in `guardrail_information` on the spend log and counted in the Guardrails Monitor.
+
+#### If the input scan fails
+
+In `logging_only` mode nothing is actually blocked, so a request the input scan flags still reaches the model and the conversation continues. `logging_only_continue_on_input_failure` decides whether the response is still observed:
+
+- **Unset or `false`** (default): if the input scan fails (the guardrail errors, or returns a verdict that would have blocked the call), the output scan is skipped and only the input verdict/error is logged. This is the pre-existing behavior, unchanged for existing deployments.
+- **`logging_only_continue_on_input_failure: true`**: the input failure is logged as a warning and the response is **still scanned**, so you get both verdicts. Since nothing is blocked in `logging_only` mode, this keeps watching the responses of flagged conversations.
+
+```yaml
+guardrails:
+  - guardrail_name: "observe-both-verdicts"
+    linten_params:
+      guardrail: generic_guardrail_api
+      mode: logging_only
+      logging_only_continue_on_input_failure: true
+      api_base: os.environ/GUARDRAIL_API_BASE
+      default_on: true
+```
+
+`input` and `output` only ever scan one direction, so the flag is ignored when `logging_only_scope` is set.
+
+#### Validation
+
+- A `logging_only_scope` value other than `input` or `output` is rejected with `422` on create and update.
+- A scope the guardrail cannot use (`logging_only_scope` set without `logging_only` in `mode`, or `input`/`output` on a guardrail that runs its own logging hook) returns `400` on create, and `422` on an update that sets such a scope. The rejected write is rolled back, so the stored guardrail keeps its previous configuration.
+- At startup, whether loaded from a config file or a stored database row, an invalid `logging_only_scope` is ignored with an error log and the guardrail keeps its configured mode.
+
+`logging_only_scope` only narrows the `logging_only` scan. Enforcement modes (`pre_call`, `during_call`, `post_call`) on the same guardrail are unaffected and still block: `mode: [pre_call, logging_only]` with `logging_only_scope: output` blocks bad requests and records response verdicts without blocking them. To observe a direction without ever blocking it, leave the matching blocking mode out of `mode`.
+
+Directional scopes apply to guardrails that run their `logging_only` scan through the generic `apply_guardrail` interface. Guardrails with their own logging hook, such as Presidio (which has its own `presidio_filter_scope`), ignore `input`/`output` here.
+
+Editing a guardrail (for example, a description-only PUT) no longer reorders guardrail execution: guardrail order is stable across updates, so which guardrail wins between a BLOCK and a MASK over the same content does not change.
+
+### Skip system messages in guardrail evaluation
+
+You can stop guardrails from scanning `role: system` content while still sending the full `messages` list to the model.
+
+Since v1.103.0, guardrails on Anthropic `/v1/messages` also scan the top-level `system` prompt. Claude Desktop and Cowork send a long system prompt with every request, and a strict prompt-attack filter, such as a Bedrock guardrail's `PROMPT_ATTACK` filter, can block it even when the user's own text is harmless. Set this flag to keep that prompt out of the scan.
+
+On `/v1/messages` the flag skips only the top-level `system` prompt. A `role: system` entry inside `messages` is client input, so guardrails scan it even with the flag set. Claude Code sends these entries mid-conversation, for example its environment details and corrections typed while a tool runs. To keep them out of a Bedrock guardrail's scan, set [`experimental_use_latest_role_message_only: true`](./bedrock#experimental-only-send-latest-user-message) on the guardrail.
+
+**Global**, in `linten_settings`:
+
+```yaml
+linten_settings:
+  skip_system_message_in_guardrail: true
+```
+
+**Per guardrail**, under that guardrail’s `linten_params`: set `skip_system_message_in_guardrail: true` or `false`. If omitted, the global `linten_settings` value is used; per-guardrail `false` forces system messages to be included even when the global flag is `true`.
+
+**Via Linten UI**, when **creating** or **editing** a guardrail in the Linten Admin Dashboard, set **Skip system messages in guardrail** (under Basic Info on create, or in the edit / guardrail settings flows):
+
+
+| UI option                             | Effect                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Use global default**                | Uses `linten_settings.skip_system_message_in_guardrail` from your proxy config        |
+| **Yes — exclude from guardrail scan** | Sets per-guardrail `skip_system_message_in_guardrail: true`                            |
+| **No — always include in scan**       | Sets per-guardrail `skip_system_message_in_guardrail: false` (overrides a global skip) |
+
+
+<Image
+  img={require('../../../img/skip_system_message_guardrail_ui.png')}
+  dark={require('../../../img/skip_system_message_guardrail_ui_dark.png')}
+  alt="Create guardrail: Skip system messages in guardrail dropdown with Use global default, Yes exclude from guardrail scan, and No always include in scan"
+  style={{ width: '100%', maxWidth: '900px', height: 'auto' }}
+/>
+
+### Skip tool messages in guardrail evaluation
+
+Same idea, for `role: tool` content: stop guardrails from scanning tool call results while still sending the full `messages` list to the model.
+
+**Global** (in `linten_settings`):
+
+```yaml
+linten_settings:
+  skip_tool_message_in_guardrail: true
+```
+
+**Per guardrail**: under that guardrail's `linten_params`, set `skip_tool_message_in_guardrail: true` or `false`, with the same global/per-guardrail precedence as the system-message flag above.
+
+**Via Linten UI**: set **Skip tool messages in guardrail** the same way, right below the system-message dropdown described above, with the same three options (**Use global default**, **Yes, exclude from guardrail scan**, **No, always include in scan**).
+
+### Where the skip flags apply
+
+**Where these apply:** The **unified** guardrail path (providers that implement `apply_guardrail` and run through Linten’s message translation layer) on **OpenAI Chat Completions** (`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages`). Examples include Presidio, Bedrock guardrails, `linten_content_filter`, OpenAI Moderation, Generic Guardrail API, and custom code guardrails that define `apply_guardrail`. **Lakera v2** also honors both flags, despite running via a direct hook rather than the unified path; see [Lakera AI](./lakera_ai#supported-params). **hide-secrets** honors `skip_tool_message_in_guardrail` on both routes the same way, but not the system-message flag; see [Secret Detection](./secret_detection#skip-tool-results).
+
+**Where these do *not* apply:** Other guardrails that run only via direct hooks on the raw request (e.g. Aporia, DynamoAI, Javelin, Lasso, Pangea, Model Armor, Azure Content Safety hooks, Guardrails AI, AIM, Cato Networks, tool permission, MCP security). These flags also do not apply to other routes until those endpoints use the same translation layer (e.g. Responses API, embeddings, speech).
+
+### Load Balancing Guardrails
+
+Need to distribute guardrail requests across multiple accounts or regions? See [Guardrail Load Balancing](./guardrail_load_balancing.md) for details on:
+
+- Load balancing across multiple AWS Bedrock accounts (useful for rate limit management)
+- Weighted distribution across guardrail instances
+- Multi-region guardrail deployments
+
+## 2. Start Linten Gateway
+
+```shell
+linten --config config.yaml --detailed_debug
+```
+
+## 3. Test request
+
+**[Langchain, OpenAI SDK Usage Examples](/docs/proxy/user_keys#request-format)**
+
+
+
+Expect this to fail since since `ishaan@berri.ai` in the request is PII
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+Expected response on failure
+
+```shell
+{
+  "error": {
+    "message": {
+      "error": "Violated guardrail policy",
+      "aporia_ai_response": {
+        "action": "block",
+        "revised_prompt": null,
+        "revised_response": "Aporia detected and blocked PII",
+        "explain_log": null
+      }
+    },
+    "type": "None",
+    "param": "None",
+    "code": "400"
+  }
+}
+
+```
+
+
+
+
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [
+      {"role": "user", "content": "hi what is the weather"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+
+
+
+
+## **Default On Guardrails**
+
+Set `default_on: true` in your guardrail config to run the guardrail on every request. This is useful if you want to run a guardrail on every request without the user having to specify it.
+
+**Note:** These will run even if user specifies a different guardrail or empty guardrails array.
+
+```yaml
+guardrails:
+  - guardrail_name: "aporia-pre-guard"
+    linten_params:
+      guardrail: aporia
+      mode: "pre_call"
+      default_on: true
+```
+
+**Test Request**
+
+In this request, the guardrail `aporia-pre-guard` will run on every request because `default_on: true` is set.
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ]
+  }'
+```
+
+**Expected response**
+
+Your response headers will include `x-linten-applied-guardrails` with the guardrail applied 
+
+```
+x-linten-applied-guardrails: aporia-pre-guard
+```
+
+### Guardrail Policies
+
+Need more control? Use [Guardrail Policies](./guardrail_policies.md) to:
+
+- Group guardrails into reusable policies
+- Enable/disable guardrails for specific teams, keys, or models
+- Inherit from existing policies and override specific guardrails
+
+## **Using Guardrails Client Side**
+
+### Test yourself **(OSS)**
+
+Pass `guardrails` to your request body to test it
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### Inspect guardrail results in the response **(OSS)**
+
+Set `include_guardrail_response: true` in the request body to get the guardrail execution records back on the response as a top-level `guardrail_information` list. Without it the response body is unchanged, so existing clients are unaffected. The flag is stripped before the request reaches the provider
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [{"role": "user", "content": "Reply OK"}],
+    "guardrails": ["aporia-pre-guard"],
+    "include_guardrail_response": true
+  }'
+```
+
+Expected response (other fields omitted)
+
+```json
+{
+  "id": "chatcmpl-EQjb0XEZzNUUGhbbYLfB2FApCuPJc",
+  "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+  "guardrail_information": [
+    {
+      "guardrail_name": "aporia-pre-guard",
+      "guardrail_provider": "aporia",
+      "guardrail_mode": "pre_call",
+      "guardrail_status": "success",
+      "guardrail_response": [],
+      "start_time": 1790040506.278482,
+      "end_time": 1790040506.278695,
+      "duration": 0.000214,
+      "masked_entity_count": {}
+    }
+  ]
+}
+```
+
+Each entry has the same shape as `guardrail_information` in the [`StandardLoggingPayload`](../logging_spec#standardloggingguardrailinformation). `guardrail_information` is `[]` when no guardrail ran for the request. Only the exact JSON boolean `true` enables it; `"true"` or `1` are treated as off. Streaming responses do not carry the field. Any `keyword`, `snippet`, `match`, or `regex` values inside `guardrail_response` are returned as `"[REDACTED]"` so masked content is never echoed back to the caller
+
+### Expose to your users **(Enterprise)**
+
+Follow this simple workflow to implement and tune guardrails:
+
+### 1. View Available Guardrails
+
+First, check what guardrails are available and their parameters:
+
+Call `/guardrails/list` to view available guardrails and the guardrail info (supported parameters, description, etc)
+
+```shell
+curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```
+
+Expected response
+
+```json
+{
+    "guardrails": [
+        {
+        "guardrail_name": "aporia-post-guard",
+        "guardrail_info": {
+            "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1 indicating content toxicity level"
+            },
+            {
+                "name": "pii_detection",
+                "type": "boolean"
+            }
+            ]
+        }
+        }
+    ]
+}
+```
+
+
+
+This config will return the `/guardrails/list` response above. The `guardrail_info` field is optional and you can add any fields under info for consumers of your guardrail
+
+
+
+```yaml
+- guardrail_name: "aporia-post-guard"
+  linten_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+  guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
+```
+
+### 2. Apply Guardrails
+
+Add selected guardrails to your chat completion request:
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [{"role": "user", "content": "your message"}],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### 3. Test with Mock LLM completions
+
+Send `mock_response` to test guardrails without making an LLM call. More info on `mock_response` [here](../../completion/mock_requests)
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "{{openai_small}}",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "mock_response": "This is a mock response",
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### 4. Pass Dynamic Parameters to Guardrail
+
+<EnterpriseFeature />
+
+Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold. **[See `guardrails` spec for more details](/docs/proxy/guardrails/quick_start#guardrails-request-parameter)**
+
+
+
+
+
+Set `guardrails={"aporia-pre-guard": {"extra_body": {"success_threshold": 0.9}}}` to pass additional parameters to the guardrail
+
+In this example `success_threshold=0.9` is passed to the `aporia-pre-guard` guardrail request body
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+      "guardrails": {
+        "aporia-pre-guard": {
+          "extra_body": {
+            "success_threshold": 0.9
+          }
+        }
+      }
+    }
+
+)
+
+print(response)
+```
+
+
+
+
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "guardrails": {
+      "aporia-pre-guard": {
+        "extra_body": {
+          "success_threshold": 0.9
+        }
+      }
+    }
+}'
+```
+
+
+
+
+
+## **Proxy Admin Controls**
+
+### Monitoring Guardrails
+
+Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
+
+:::
+
+#### Setup
+
+1. Connect Linten to a [supported logging provider](../logging)
+2. Make a request with a `guardrails` parameter
+3. Check your logging provider for the guardrail trace
+
+#### Traced Guardrail Success
+
+<Image img={require('../../../img/gd_success.png')} />
+
+#### Traced Guardrail Failure
+
+<Image img={require('../../../img/gd_fail.png')} />
+
+### Control Guardrails per API Key {#-control-guardrails-per-api-key}
+
+<EnterpriseFeature />
+
+Use this to control what guardrails run per API Key. In this tutorial we only want the following guardrails to run for 1 API Key
+
+- `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
+
+**Step 1** Create Key with guardrail settings
+
+
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+    -H "Authorization: Bearer $LINTEN_API_KEY" \
+    -H 'Content-Type: application/json' \
+    -d '{
+            "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+    }'
+```
+
+
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header "Authorization: Bearer $LINTEN_API_KEY" \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+}'
+```
+
+
+
+**Step 2** Test it with new key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "my email is ishaan@berri.ai"
+        }
+    ]
+}'
+```
+
+### Tag-based Guardrail Modes {#-tag-based-guardrail-modes}
+
+<EnterpriseFeature />
+
+Run guardrails based on the user-agent header. This is useful for running pre-call checks on OpenWebUI but only masking in logs for Claude CLI.
+
+Both `default` and tag values can be a single mode string or a list of modes.
+
+
+
+```yaml
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: {{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "guardrails_ai-guard"
+    linten_params:
+      guardrail: guardrails_ai
+      guard_name: "pii_detect" # Guardrail AI guard name
+      mode:
+        tags:
+            "User-Agent: claude-cli": "logging_only"                 # Claude CLI - only mask in logs
+        default: "pre_call"               # Default mode when no tags match
+      api_base: os.environ/GUARDRAILS_AI_API_BASE # Guardrails AI API Base. Defaults to "http://0.0.0.0:8000"
+      default_on: true # run on every request
+```
+
+
+
+```yaml
+Per guardrailmodel_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: {{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "guardrails_ai-guard"
+    linten_params:
+      guardrail: guardrails_ai
+      guard_name: "pii_detect"
+      mode:
+        tags:
+            "User-Agent: claude-cli": "logging_only"
+        default: ["pre_call", "post_call"]  # Run on both pre and post call when no tags match
+      api_base: os.environ/GUARDRAILS_AI_API_BASE
+      default_on: true
+```
+
+
+
+```yaml
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: {{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "guardrails_ai-guard"
+    linten_params:
+      guardrail: guardrails_ai
+      guard_name: "pii_detect"
+      mode:
+        tags:
+            "User-Agent: claude-cli": ["pre_call", "post_call"]  # Run both pre and post call for claude-cli
+        default: "logging_only"  # Default to logging only when no tags match
+      api_base: os.environ/GUARDRAILS_AI_API_BASE
+      default_on: true
+```
+
+
+
+### Model-level Guardrails {#-model-level-guardrails}
+
+<EnterpriseFeature />
+
+This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+```yaml
+model_list:
+  - model_name: {{anthropic}}
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+      api_base: https://api.anthropic.com/v1
+      guardrails: ["azure-text-moderation"]
+  - model_name: openai-{{openai_large}}
+    linten_params:
+      model: openai/{{openai_large}}
+
+guardrails:
+  - guardrail_name: "presidio-pii"
+    linten_params:
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      mode: "pre_call"
+      presidio_language: "en"  # optional: set default language for PII analysis
+      pii_entities_config:
+        PERSON: "BLOCK"  # Will mask credit card numbers
+  - guardrail_name: azure-text-moderation
+    linten_params:
+      guardrail: azure/text_moderations
+      mode: "post_call" 
+      api_key: os.environ/AZURE_GUARDRAIL_API_KEY
+      api_base: os.environ/AZURE_GUARDRAIL_API_BASE 
+```
+
+### Disable team from turning on/off guardrails
+
+<EnterpriseFeature />
+
+#### 1. Disable team from modifying guardrails
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/update' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
+    "metadata": {"guardrails": {"modify_guardrails": false}}
+}'
+```
+
+#### 2. Try to disable guardrails for a call
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LINTEN_VIRTUAL_KEY' \
+--data '{
+"model": "{{openai_small}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Think of 10 random colors."
+      }
+    ],
+    "metadata": {"guardrails": {"hide_secrets": false}}
+}'
+```
+
+#### 3. Get 403 Error
+
+```
+{
+    "error": {
+        "message": {
+            "error": "Your team does not have permission to modify guardrails."
+        },
+        "type": "auth_error",
+        "param": "None",
+        "code": 403
+    }
+}
+```
+
+Expect to NOT see `+1 412-612-9992` in your server logs on your callback. 
+
+:::info
+The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"pii_masking": true}`
+:::
+
+## Specification
+
+### `guardrails` Configuration on YAML
+
+```yaml
+guardrails:
+  - guardrail_name: string     # Required: Name of the guardrail
+    linten_params:            # Required: Configuration parameters
+      guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
+      mode: Union[string, List[string], Mode]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
+      api_key: string          # Required: API key for the guardrail service
+      api_base: string         # Optional: Base URL for the guardrail service
+      default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
+      logging_only_scope: string # Optional: "input" (request only) or "output" (response only). Unset scans both directions and keeps the pre-existing behavior
+      logging_only_continue_on_input_failure: boolean # Optional: when true, a flagged or failing logging_only request scan is logged and the response is still scanned. Ignored when logging_only_scope is set
+    guardrail_info:            # Optional[Dict]: Additional information about the guardrail
+      
+```
+
+Mode Specification
+
+Both `default` and tag values accept either a single string or a list of strings.
+
+```python
+from linten.types.guardrails import Mode
+
+# Single default mode
+mode = Mode(
+    tags={"User-Agent: claude-cli": "logging_only"},
+    default="logging_only"
+)
+
+# Multiple default modes
+mode = Mode(
+    tags={"User-Agent: claude-cli": "logging_only"},
+    default=["pre_call", "post_call"]
+)
+
+# Multiple modes on a tag value
+mode = Mode(
+    tags={"User-Agent: claude-cli": ["pre_call", "post_call"]},
+    default="logging_only"
+)
+```
+
+### `guardrails` Request Parameter
+
+The `guardrails` parameter can be passed to any Linten Proxy endpoint (`/chat/completions`, `/completions`, `/embeddings`).
+
+#### Format Options
+
+1. Simple List Format:
+
+```python
+{"guardrails": [
+    "aporia-pre-guard",
+    "aporia-post-guard"
+]}
+```
+
+1. Advanced Dictionary Format:
+
+In this format the dictionary key is `guardrail_name` you want to run
+
+```python
+{"guardrails": {
+    "aporia-pre-guard": {
+        "extra_body": {
+            "success_threshold": 0.9,
+            "other_param": "value"
+        }
+    }
+}}
+```
+
+#### Type Definition
+
+```python
+guardrails: Union[
+    List[str],                              # Simple list of guardrail names
+    Dict[str, DynamicGuardrailParams]       # Advanced configuration
+]
+
+class DynamicGuardrailParams:
+    extra_body: Dict[str, Any]              # Additional parameters for the guardrail
+```

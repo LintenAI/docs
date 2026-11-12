@@ -1,0 +1,895 @@
+---
+sidebar_label: "Reasoning"
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# 'Thinking' / 'Reasoning Content'
+
+<SinceVersion v="1.63.0" />
+
+Supported Providers:
+- Deepseek (`deepseek/`)
+- Anthropic API (`anthropic/`)
+- Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
+- OpenAI Responses API (`openai/responses/`)
+- Vertex AI (Anthropic) (`vertexai/`)
+- OpenRouter (`openrouter/`)
+- XAI (`xai/`)
+- Google AI Studio (`google/`)
+- Vertex AI (`vertex_ai/`)
+- Perplexity (`perplexity/`)
+- Mistral AI (Magistral models) (`mistral/`)
+- Groq (`groq/`)
+
+Linten will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
+
+```python nolint title="Example response from linten"
+"message": {
+    ...
+    "reasoning_content": "The capital of France is Paris.",
+    "thinking_blocks": [ # only returned for Anthropic models
+        {
+            "type": "thinking",
+            "thinking": "The capital of France is Paris.",
+            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
+        }
+    ]
+}
+```
+
+## Quick Start 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from linten import completion
+import os 
+
+os.environ["ANTHROPIC_API_KEY"] = ""
+
+response = completion(
+  model="anthropic/{{anthropic}}",
+  messages=[
+    {"role": "user", "content": "What is the capital of France?"},
+  ],
+  reasoning_effort="low", 
+)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "anthropic/{{anthropic}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ],
+    "reasoning_effort": "low"
+}'
+```
+</TabItem>
+</Tabs>
+
+**Expected Response**
+
+```bash
+{
+    "id": "3b66124d79a708e10c603496b363574c",
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": " won the FIFA World Cup in 2022.",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "created": 1723323084,
+    "model": "deepseek/deepseek-chat",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_7e0991cad4",
+    "usage": {
+        "completion_tokens": 12,
+        "prompt_tokens": 16,
+        "total_tokens": 28,
+    },
+    "service_tier": null
+}
+```
+
+## Tool Calling with `thinking`
+
+Here's how to use `thinking` blocks by Anthropic with tool calling.
+
+### Important: OpenAI-Compatible API Limitations
+
+:::warning[Compatibility Notice]
+
+Anthropic extended thinking with tool calling is **not fully compatible** with OpenAI-compatible API clients. This is due to fundamental architectural differences between how OpenAI and Anthropic handle reasoning in multi-turn conversations.
+
+:::
+
+When using Anthropic models with `thinking` enabled and tool calling, you **must include `thinking_blocks`** from the previous assistant response when sending tool results back. Failure to do so will result in a `400 Bad Request` error.
+
+**OpenAI vs Anthropic Architecture:**
+
+| Provider | API Architecture | Reasoning Storage | Multi-turn Handling |
+|----------|------------------|-------------------|---------------------|
+| **OpenAI** (o1, o3) | Responses API (Stateful) | Server-side | Server stores reasoning internally; client sends `previous_response_id` |
+| **Anthropic** (Claude) | Messages API (Stateless) | Client-side | Client must store and resend `thinking_blocks` with every request |
+
+
+1. OpenAI's Chat Completions spec has **no field** for `thinking_blocks`
+2. OpenAI-compatible clients (LibreChat, Open WebUI, Vercel AI SDK, etc.) **ignore** the `thinking_blocks` field in responses
+3. When these clients reconstruct the assistant message for the next turn, the thinking blocks are lost
+4. Anthropic rejects the request because the assistant message doesn't start with a thinking block
+
+:::tip[Linten supports thinking_blocks]
+Linten's `completion()` API **does support** sending `thinking_blocks` in assistant messages. If you're using Linten directly (not through an OpenAI-compatible client), you can preserve and resend `thinking_blocks` and everything will work correctly.
+:::
+
+**Solutions:**
+
+1. **Use Linten's built-in workaround** (recommended): Set `linten.modify_params = True` and Linten will automatically handle this incompatibility by dropping the `thinking` param when `thinking_blocks` are missing (see below)
+2. **For client developers**: Explicitly handle and resend the `thinking_blocks` field (see example below)
+3. **Disable extended thinking** when using tools with OpenAI-compatible clients that don't support `thinking_blocks`
+4. **Use Anthropic's native API** directly instead of OpenAI-compatible endpoints
+
+### Linten Built-in Workaround
+
+Linten can automatically handle this incompatibility when `modify_params=True` is set. If the client sends a request with `thinking` enabled but the assistant message with `tool_calls` is missing `thinking_blocks`, Linten will automatically drop the `thinking` param for that turn to avoid the error.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+import linten
+
+# Enable automatic parameter modification
+linten.modify_params = True
+
+# Now this will work even if thinking_blocks are missing from the assistant message
+response = linten.completion(
+    model="anthropic/{{anthropic}}",
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    tools=[...],
+    messages=[
+        {"role": "user", "content": "What's the weather in Madrid?"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Madrid"}'}}]
+            # Note: thinking_blocks is missing here - Linten will handle it
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "22°C sunny"}
+    ]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml showLineNumbers title="config.yaml"
+linten_settings:
+  modify_params: true  # Enable automatic parameter modification
+
+model_list:
+  - model_name: claude-thinking
+    linten_params:
+      model: anthropic/{{anthropic}}
+      thinking:
+        type: enabled
+        budget_tokens: 1024
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When `modify_params=True` and Linten drops the `thinking` param, the model will **not** use extended thinking for that specific turn. The conversation will continue normally, but without reasoning for that response.
+:::
+
+**Correct way to include `thinking_blocks`:**
+
+```python
+# After receiving a response with tool_calls, include thinking_blocks when sending back:
+assistant_message = {
+    "role": "assistant",
+    "content": response.choices[0].message.content,
+    "tool_calls": [...],
+    "thinking_blocks": response.choices[0].message.thinking_blocks  # ← Required!
+}
+```
+
+---
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+linten._turn_on_debug()
+linten.modify_params = True
+model = "anthropic/{{anthropic}}" # works across Anthropic, Bedrock, Vertex AI
+# Step 1: send the conversation and available functions to the model
+messages = [
+    {
+        "role": "user",
+        "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+    }
+]
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state",
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                    },
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+response = linten.completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",  # auto is default, but we'll be explicit
+    reasoning_effort="low",
+)
+print("Response\n", response)
+response_message = response.choices[0].message
+tool_calls = response_message.tool_calls
+
+print("Expecting there to be 3 tool calls")
+assert (
+    len(tool_calls) > 0
+)  # this has to call the function for SF, Tokyo and paris
+
+# Step 2: check if the model wanted to call a function
+print(f"tool_calls: {tool_calls}")
+if tool_calls:
+    # Step 3: call the function
+    # Note: the JSON response may not always be valid; be sure to handle errors
+    available_functions = {
+        "get_current_weather": get_current_weather,
+    }  # only one function in this example, but you can have multiple
+    messages.append(
+        response_message
+    )  # extend conversation with assistant's reply
+    print("Response message\n", response_message)
+    # Step 4: send the info for each function call and function response to the model
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        if function_name not in available_functions:
+            # the model called a function that does not exist in available_functions - don't try calling anything
+            return
+        function_to_call = available_functions[function_name]
+        function_args = json.loads(tool_call.function.arguments)
+        function_response = function_to_call(
+            location=function_args.get("location"),
+            unit=function_args.get("unit"),
+        )
+        messages.append(
+            {
+                "tool_call_id": tool_call.id,
+                "role": "tool",
+                "name": function_name,
+                "content": function_response,
+            }
+        )  # extend conversation with function response
+    print(f"messages: {messages}")
+    second_response = linten.completion(
+        model=model,
+        messages=messages,
+        seed=22,
+        reasoning_effort="low",
+        # tools=tools,
+        drop_params=True,
+    )  # get a new response from the model where it can see the function response
+    print("second response\n", second_response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml showLineNumbers
+model_list:
+  - model_name: claude-3-7-sonnet-thinking
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+      thinking: {
+        "type": "enabled",
+        "budget_tokens": 1024
+      }
+```
+
+2. Run proxy
+
+```bash showLineNumbers
+linten --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Make 1st call
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "claude-3-7-sonnet-thinking",
+    "messages": [
+      {"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"},
+    ],
+    "tools": [
+        {
+          "type": "function",
+          "function": {
+              "name": "get_current_weather",
+              "description": "Get the current weather in a given location",
+              "parameters": {
+                  "type": "object",
+                  "properties": {
+                      "location": {
+                          "type": "string",
+                          "description": "The city and state",
+                      },
+                      "unit": {
+                          "type": "string",
+                          "enum": ["celsius", "fahrenheit"],
+                      },
+                  },
+                  "required": ["location"],
+              },
+          },
+        }
+    ],
+    "tool_choice": "auto"
+  }'
+```
+
+4. Make 2nd call with tool call results
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "claude-3-7-sonnet-thinking",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What\'s the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
+      },
+      {
+        "role": "assistant",
+        "content": "I\'ll check the current weather for these three cities for you:",
+        "tool_calls": [
+          {
+            "index": 2,
+            "function": {
+              "arguments": "{\"location\": \"San Francisco\"}",
+              "name": "get_current_weather"
+            },
+            "id": "tooluse_mnqzmtWYRjCxUInuAdK7-w",
+            "type": "function"
+          }
+        ],
+        "function_call": null,
+        "reasoning_content": "The user is asking for the current weather in three different locations: San Francisco, Tokyo, and Paris. I have access to the `get_current_weather` function that can provide this information.\n\nThe function requires a `location` parameter, and has an optional `unit` parameter. The user hasn't specified which unit they prefer (celsius or fahrenheit), so I'll use the default provided by the function.\n\nI need to make three separate function calls, one for each location:\n1. San Francisco\n2. Tokyo\n3. Paris\n\nThen I'll compile the results into a response with three distinct weather reports as requested by the user.",
+        "thinking_blocks": [
+          {
+            "type": "thinking",
+            "thinking": "The user is asking for the current weather in three different locations: San Francisco, Tokyo, and Paris. I have access to the `get_current_weather` function that can provide this information.\n\nThe function requires a `location` parameter, and has an optional `unit` parameter. The user hasn't specified which unit they prefer (celsius or fahrenheit), so I'll use the default provided by the function.\n\nI need to make three separate function calls, one for each location:\n1. San Francisco\n2. Tokyo\n3. Paris\n\nThen I'll compile the results into a response with three distinct weather reports as requested by the user.",
+            "signature": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c="
+          }
+        ],
+        "provider_specific_fields": {
+          "reasoningContentBlocks": [
+            {
+              "reasoningText": {
+                "signature": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c=",
+                "text": "The user is asking for the current weather in three different locations: San Francisco, Tokyo, and Paris. I have access to the `get_current_weather` function that can provide this information.\n\nThe function requires a `location` parameter, and has an optional `unit` parameter. The user hasn't specified which unit they prefer (celsius or fahrenheit), so I'll use the default provided by the function.\n\nI need to make three separate function calls, one for each location:\n1. San Francisco\n2. Tokyo\n3. Paris\n\nThen I'll compile the results into a response with three distinct weather reports as requested by the user."
+              }
+            }
+          ]
+        }
+      },
+      {
+        "tool_call_id": "tooluse_mnqzmtWYRjCxUInuAdK7-w",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": "{\"location\": \"San Francisco\", \"temperature\": \"72\", \"unit\": \"fahrenheit\"}"
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## Switching between Anthropic + Deepseek models 
+
+Set `drop_params=True` to drop the 'thinking' blocks when swapping from Anthropic to Deepseek models. Suggest improvements to this approach [here](https://github.com/LintenAI/linten/discussions/8927).
+
+```python showLineNumbers
+linten.drop_params = True # EITHER GLOBALLY or per request
+
+# or per request
+## Anthropic
+response = linten.completion(
+  model="anthropic/{{anthropic}}",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  reasoning_effort="low",
+  drop_params=True,
+)
+
+## Deepseek
+response = linten.completion(
+  model="deepseek/deepseek-chat",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  reasoning_effort="low",
+  drop_params=True,
+)
+```
+
+## Spec 
+
+
+These fields can be accessed via `response.choices[0].message.reasoning_content` and `response.choices[0].message.thinking_blocks`.
+
+- `reasoning_content` - str: The reasoning content from the model. Returned across all providers.
+- `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
+  - `type` - str: The type of thinking block.
+  - `thinking` - str: The thinking from the model.
+  - `signature` - str: The signature delta from the model.
+
+
+
+## Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+response = linten.completion(
+  model="anthropic/{{anthropic}}",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "anthropic/{{anthropic}}",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## Reasoning on the Responses API
+
+`/v1/responses` accepts the OpenAI `reasoning` object, and Linten translates it into whatever the target model expects. Claude models take it on every route Linten serves them on (`anthropic/`, `bedrock/`, `vertex_ai/`, `azure_ai/`), so the same request shape controls reasoning depth no matter which provider is behind the model.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+response = linten.responses(
+  model="vertex_ai/{{anthropic_large}}",
+  input="How many prime numbers are less than 30?",
+  reasoning={"effort": "low"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "{{anthropic_large}}",
+    "input": "How many prime numbers are less than 30?",
+    "reasoning": {"effort": "low"}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+Anthropic changed how thinking is configured in Claude 4.6, so the translation depends on which model you are calling. Linten decides from the model's `supports_adaptive_thinking` capability rather than the model name, so your own code never has to branch on it.
+
+Claude 4.6 and newer (Sonnet 4.6, Opus 4.7, Opus 4.8) use adaptive thinking, and the effort level is forwarded alongside it:
+
+```json title="what Linten sends for reasoning.effort = low"
+{"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+```
+
+`minimal` collapses to `low` in that form; the other levels pass through unchanged. Earlier Claude models get the legacy token budget instead, `{"thinking": {"type": "enabled", "budget_tokens": N}}`, sized from the effort level:
+
+| `reasoning.effort` | `budget_tokens` |
+| --- | --- |
+| `minimal` | 1024 |
+| `low` | 1024 |
+| `medium` | 2048 |
+| `high` | 4096 |
+| `xhigh` | 8192 |
+| `max` | 16384 |
+
+Each budget is overridable through the matching `DEFAULT_REASONING_EFFORT_*_THINKING_BUDGET` environment variable, and `{"effort": "none"}` turns thinking off entirely on both shapes.
+
+If you would rather set Anthropic's native parameters yourself, send `thinking` and `output_config` in the request body and Linten forwards them untouched.
+
+```bash showLineNumbers
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "{{anthropic_large}}",
+    "input": "How many prime numbers are less than 30?",
+    "thinking": {"type": "adaptive"},
+    "output_config": {"effort": "high"}
+  }'
+```
+
+:::info
+
+Claude 4.6+ reject the legacy shape with `400 "thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.` Linten only emits the adaptive shape for models its model map knows support it, so hitting this error usually means the model is newer than your Linten install. Opus 4.8 routed through Bedrock, Vertex AI, or Azure AI works <SinceVersion v="1.89.0" /> ([PR #29702](https://github.com/LintenAI/linten/pull/29702))
+
+:::
+
+## Checking if a model supports reasoning
+
+<Tabs>
+<TabItem label="Linten Python SDK" value="Python">
+
+Use `linten.supports_reasoning(model="")` -> returns `True` if model supports reasoning and `False` if not.
+
+```python showLineNumbers title="linten.supports_reasoning() usage"
+import linten 
+
+# Example models that support reasoning
+assert linten.supports_reasoning(model="anthropic/{{anthropic}}") == True
+assert linten.supports_reasoning(model="deepseek/deepseek-chat") == True 
+
+# Example models that do not support reasoning
+assert linten.supports_reasoning(model="openai/gpt-4.1") == False 
+```
+</TabItem>
+
+<TabItem label="Linten Proxy Server" value="proxy">
+
+1. Define models that support reasoning in your `config.yaml`. You can optionally add `supports_reasoning: True` to the `model_info` if Linten does not automatically detect it for your custom model.
+
+```yaml showLineNumbers title="linten proxy config.yaml"
+model_list:
+  - model_name: claude-3-sonnet-reasoning
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: deepseek-reasoning
+    linten_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  # Example for a custom model where detection might be needed
+  - model_name: my-custom-reasoning-model 
+    linten_params:
+      model: openai/my-custom-model # Assuming it's OpenAI compatible
+      api_base: http://localhost:8000
+      api_key: fake-key
+    model_info:
+      supports_reasoning: True # Explicitly mark as supporting reasoning
+```
+
+2. Run the proxy server:
+
+```bash showLineNumbers title="linten --config config.yaml"
+linten --config config.yaml
+```
+
+3. Call `/model_group/info` to check if your model supports `reasoning`
+
+```shell showLineNumbers title="curl /model_group/info"
+curl -X 'GET' \
+  'http://localhost:4000/model_group/info' \
+  -H 'accept: application/json' \
+  -H "x-api-key: $LINTEN_API_KEY"
+```
+
+Expected Response 
+
+```json showLineNumbers title="response from /model_group/info"
+{
+  "data": [
+    {
+      "model_group": "claude-3-sonnet-reasoning",
+      "providers": ["anthropic"],
+      "mode": "chat",
+      "supports_reasoning": true
+    },
+    {
+      "model_group": "deepseek-reasoning",
+      "providers": ["deepseek"],
+      "supports_reasoning": true
+    },
+    {
+      "model_group": "my-custom-reasoning-model",
+      "providers": ["openai"],
+      "supports_reasoning": true
+    }
+  ]
+}
+````
+
+
+</TabItem>
+</Tabs>
+
+:::tip[gpt-5.4: reasoning_effort + function tools]
+
+When `gpt-5.4+` requests to `linten.completion()` include both `reasoning_effort` and `tools`, Linten **automatically routes** the request through the Responses API bridge. This works for both **OpenAI** (`openai/gpt-5.4`) and **Azure** (`azure/gpt-5.4`) providers, with no extra configuration needed.
+
+You can also route explicitly via `openai/responses/gpt-5.4` or `azure/responses/gpt-5.4`. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+**Azure custom deployment names:** Auto-routing relies on the deployment name matching the `gpt-5.4*` pattern. If you use a custom deployment name (e.g. `"my-reasoning-model"`), enable routing via:
+
+**SDK:**
+```python
+linten.completion(model="azure/responses/my-reasoning-model")  # ...
+```
+
+**Proxy config:**
+```yaml
+model_list:
+  - model_name: my-reasoning-model
+    linten_params:
+      model: azure/my-reasoning-model
+    model_info:
+      mode: responses
+```
+
+:::
+
+## Round `reasoning_effort` to the levels a deployment accepts {#reasoning-effort-levels}
+
+<SinceVersion v="1.108.0" />
+
+Some deployments accept only a few reasoning effort levels and answer 400 for the rest. List the levels a deployment accepts in `reasoning_effort_levels` under its `model_info`, and the proxy sends a declared level in place of any level the deployment does not accept. This applies on `/v1/chat/completions` (streaming included), `/v1/responses`, and `/v1/messages`, for every provider. Only the deployment's own declaration turns this on. Mistral and Together AI keep mapping levels from the model cost map on their own, as they did before.
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: my-model-azure-ai
+    linten_params:
+      model: azure_ai/my-model
+      api_base: https://my-endpoint.services.ai.azure.com
+      api_key: os.environ/AZURE_AI_API_KEY
+    model_info:
+      reasoning_effort_levels: ["low", "high", "max", "none"]
+  - model_name: my-model-vllm
+    linten_params:
+      model: hosted_vllm/my-model
+      api_base: https://my-vllm-server.example.com/v1
+    model_info:
+      reasoning_effort_levels: ["low", "high", "max", "none"]
+      reasoning_effort_rounding: down
+```
+
+The strength order, from weakest to strongest, is `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Rounding up is the default, and it sends the weakest declared level at least as strong as the request, or the strongest declared level when the request is above all of them. Rounding down sends the strongest declared level at most as strong as the request, or the weakest declared level when the request is below all of them. With the config above, `my-model-azure-ai` rounds up and `my-model-vllm` rounds down.
+
+| Requested | Sent when rounding up | Sent when rounding down |
+|---|---|---|
+| `minimal` | `low` | `low` |
+| `low` | `low` | `low` |
+| `medium` | `high` | `low` |
+| `high` | `high` | `high` |
+| `xhigh` | `max` | `high` |
+| `max` | `max` | `max` |
+| `none` | `none` | `none` |
+| `default` | no reasoning effort | no reasoning effort |
+
+`none` and any level name outside the strength order are sent unchanged, so a caller who turned reasoning off is never rounded up. With `drop_params: true`, a level the deployment does not declare is dropped instead, the same way Linten drops other values a provider does not support. `default` sends no reasoning effort at all.
+
+To round down on every deployment, set `reasoning_effort_rounding: down` under `linten_settings`. A deployment's own `model_info.reasoning_effort_rounding` wins over the global setting. The value ignores case and surrounding spaces. A value other than `up` or `down` is ignored with a warning in the proxy logs, and the next setting applies, so the proxy checks the deployment first, then `linten_settings`, then falls back to `up`.
+
+A non-empty `reasoning_effort_levels` also lets a provider that does not otherwise accept `reasoning_effort` take it, which today means `azure_ai`. An empty list does not. On OpenAI and Azure GPT-5 deployments, a declared level such as `xhigh` or `none` is sent even when the model map does not list it for that model.
+
+On `/v1/messages`, which Claude Code and other Anthropic-format clients call, the effort derived from `thinking` or `output_config.effort` is rounded onto the declared levels the same way, so `xhigh` goes to `max` when `max` is declared. A `/v1/chat/completions` request that sends an Anthropic-style `thinking` budget is rounded too, on every provider. On adaptive Claude models the budget first becomes an effort through Claude's own mapping, and the caller's `thinking.display` is kept. A `budget_tokens` that is not a number answers 400, or is dropped with `drop_params: true`. When the request also sends `reasoning_effort` or `output_config.effort`, that level wins over the budget, `default` included, unless `drop_params: true` drops it, and then the budget sets the effort.
+
+Each change logs one INFO line in this shape.
+
+```text
+reasoning_effort medium sent as high (rounding up) to deployment <deployment id>, model group my-model-azure-ai, model azure_ai/my-model
+```
+
+The proxy shows INFO lines only when `LINTEN_LOG=INFO` is set. With `json_logs: true` under `linten_settings`, the line also carries `reasoning_effort_deployment_id`, `reasoning_effort_model_group`, `reasoning_effort_deployment_model`, `reasoning_effort_requested`, `reasoning_effort_sent`, and `reasoning_effort_rounding` as JSON keys, so you can filter or chart them.
+
+## OpenAI Responses API - Auto-Summary Control
+
+When using OpenAI Responses API models (like `{{openai_large}}`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.
+
+### Enabling Auto-Summary
+
+You can enable automatic `summary="detailed"` in two ways:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import linten
+
+# Enable auto-summary globally
+linten.reasoning_auto_summary = True
+
+response = linten.completion(
+    model="openai/responses/{{openai_small}}",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",  # Will automatically add summary="detailed"
+)
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+# Set environment variable
+export LINTEN_REASONING_AUTO_SUMMARY=true
+
+# Or in your .env file
+LINTEN_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+linten_settings:
+  reasoning_auto_summary: true  # Enable auto-summary for all requests
+
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: openai/responses/{{openai_small}}
+```
+
+**Per-model configuration** (recommended when using Open WebUI or clients that cannot set `extra_body`):
+
+```yaml
+model_list:
+  - model_name: {{openai_large}}
+    linten_params:
+      model: openai/{{openai_large}}
+      # String format - uses reasoning_auto_summary for summary when set
+      reasoning_effort: "high"
+    model_info:
+      mode: responses  # if using Responses API bridge
+
+  - model_name: gpt-5.6-terra-with-summary
+    linten_params:
+      model: openai/{{openai_large}}
+      # Dict format - explicit control over effort and summary
+      reasoning_effort: {"effort": "high", "summary": "detailed"}
+```
+
+</TabItem>
+</Tabs>
+
+### Manual Control (Recommended)
+
+For fine-grained control, pass `reasoning_effort` as a dictionary:
+
+```python
+response = linten.completion(
+    model="openai/responses/{{openai_small}}",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
+)
+```
+
+### Summary Preservation via `/v1/messages` Adapter
+
+When using the Anthropic `/v1/messages` adapter to route non-Claude models (e.g., `openai/{{openai_large}}`), the `thinking.summary` value is preserved and forwarded to the downstream provider. For example:
+
+```python
+import linten
+
+response = await linten.anthropic.messages.acreate(
+    model="openai/{{openai_large}}",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000, "summary": "concise"},
+)
+# The summary="concise" is preserved when routing to OpenAI's Responses API
+```
+
+### Enabling Default Summary Injection for `/v1/messages` Adapter
+
+When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, you can opt-in to automatic `summary="detailed"` injection using the `reasoning_auto_summary` flag. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
+
+To **enable** this default injection, use the `reasoning_auto_summary` flag:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import linten
+
+# Enable default summary="detailed" injection
+linten.reasoning_auto_summary = True
+
+response = await linten.anthropic.messages.acreate(
+    model="openai/{{openai_large}}",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000},
+)
+# summary="detailed" will be automatically added to reasoning_effort
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+export LINTEN_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+linten_settings:
+  reasoning_auto_summary: true
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+This flag only affects the automatic injection of `summary="detailed"` when no user-provided summary is present. If you explicitly pass `thinking.summary` (e.g., `"concise"` or `"auto"`), your value is always preserved regardless of this flag.
+
+:::

@@ -1,0 +1,541 @@
+// @ts-check
+// Note: type annotations allow type checking and IDEs autocompletion
+
+require('dotenv').config();
+
+// Same code-block palettes as docusaurus.io (github + vsDark, with their token overrides).
+const lightCodeTheme = require('./src/utils/prismLight');
+const darkCodeTheme = require('./src/utils/prismDark');
+
+/** @type {import('@docusaurus/types').Config} */
+const config = {
+  // Temporary fallback while the internal gateway is unavailable.
+  // Set DOCS_CHAT_PROVIDER=internal and rebuild to switch back.
+  customFields: {
+    inkeepApiKey: process.env.DOCS_CHAT_PROVIDER === 'internal' ? null : process.env.INKEEP_API_KEY || null,
+  },
+  title: 'linten',
+  tagline: 'Simplify LLM API Calls',
+  // SVG favicon that turns white on dark browser themes; PNG for browsers without SVG icons
+  favicon: '/img/brand/linten-favicon.svg',
+  headTags: [
+    {tagName: 'link', attributes: {rel: 'alternate icon', type: 'image/png', href: '/img/brand/linten-monogram-blue-192.png'}},
+  ],
+
+  // Set the production url of your site here
+  url: 'https://docs.linten.ai/',
+  // Set the /<baseUrl>/ pathname under which your site is served
+  // For GitHub pages deployment, it is often '/<projectName>/'
+  baseUrl: '/',
+  staticDirectories: ['static', require('./plugins/social-cards').cacheDir],
+
+  onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
+  onBrokenMarkdownLinks: 'throw',
+
+  // Even if you don't use internalization, you can use this field to set useful
+  // metadata like html lang. For example, if your site is Chinese, you may want
+  // to replace "en" with "zh-Hans".
+  i18n: {
+    defaultLocale: 'en',
+    locales: ['en'],
+  },
+  clientModules: [require.resolve('./src/clientModules/imageZoom.js'), require.resolve('./src/clientModules/gridMarks.js'), require.resolve('./src/clientModules/lensLegacyRedirect.js')],
+  plugins: [
+    require('./plugins/linten-stats'),
+    require('./plugins/release-feed'),
+    require('./plugins/llms'),
+    // vega-canvas tries to load the optional node `canvas` package during SSR.
+    // Charts render as SVG, so resolve it to an empty module.
+    () => ({
+      name: 'ignore-optional-canvas',
+      configureWebpack: () => ({resolve: {alias: {canvas: false}}}),
+    }),
+    require('./plugins/optimize-images'),
+    require('./plugins/webpack-cache'),
+    require('./plugins/rust-migration-posts'),
+    require('./plugins/social-cards'),
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          // The decisions page was split into subpages for a few days in October 2026.
+          {from: '/docs/decisions/providers', to: '/docs/decisions#supported-providers'},
+          {from: '/docs/decisions/openai_format', to: '/docs/decisions#v1decisions'},
+          {from: '/docs/decisions/systemone_format', to: '/docs/decisions#v1systemone'},
+          {from: '/docs/decisions/typesafe_images', to: '/docs/decisions#typesafe-images-box-questions-and-long-context'},
+          {from: '/docs/decisions/sdk', to: '/docs/decisions#sdk-usage'},
+          {from: '/docs/decisions/admin_ui', to: '/docs/decisions#try-it-in-the-admin-ui'},
+          {from: '/docs/learn', to: '/docs/tutorials'},
+          {from: '/docs/learn/gateway_quickstart', to: '/docs/proxy/quick_start'},
+          {from: '/docs/learn/python_sdk_quickstart', to: '/docs/learn/sdk_quickstart'},
+          {from: '/docs/learn/enterprise_quickstart_learn', to: '/docs/learn/enterprise_quickstart'},
+          {from: '/docs/tutorials/python_sdk', to: '/docs/learn/call-any-model'},
+          {from: '/docs/tutorials/provider_tutorials', to: '/docs/learn/call-any-model'},
+          {from: '/docs/tutorials/proxy_admin_access', to: '/docs/learn/run-the-gateway'},
+          {from: '/docs/tutorials/proxy_features_safety', to: '/docs/learn/add-safety'},
+          {from: '/docs/tutorials/observability_evaluation', to: '/docs/learn/observe-and-evaluate'},
+          {from: '/docs/manage_with_ai_agents', to: '/docs/ai_tools'},
+          {from: '/docs/routing-load-balancing', to: '/docs/proxy/load_balancing'},
+          {from: '/docs/guides/retrieval_knowledge', to: '/docs/guides/tools_integrations'},
+          {from: '/docs/guides/security_network', to: '/docs/guides/security_settings'},
+          {from: '/docs/guides/reliability_testing_spend', to: '/docs/completion/reliable_completions'},
+          {from: '/docs/proxy/liteadmin_slack_native', to: '/docs/proxy/liteadmin_slack'},
+          {from: '/docs/proxy/multiple_admins', to: '/docs/proxy/audit_logs'},
+          {from: '/docs/proxy/jwt_auth_arch', to: '/docs/proxy/access_management/jwt_permissions#beta-control-access-with-oidc-roles'},
+          {from: ['/docs/oidc', '/docs/oidcz'], to: '/docs/proxy/model_management#workload-identity-credentials'},
+          {from: '/docs/proxy/lens/coding_agents', to: '/docs/proxy/lens/coding-agents'},
+          {from: '/docs/proxy/rust_gateway', to: '/rust-migration'},
+          {
+            from: '/docs/proxy/control_plane_and_data_plane',
+            to: '/docs/proxy/multi_region',
+          },
+          {
+            from: '/docs/proxy/high_availability_control_plane',
+            to: '/docs/proxy/global_control_plane',
+          },
+          {
+            from: '/docs/tutorials/openai_codex',
+            to: '/docs/proxy/client_setup/codex_cli',
+          },
+          {
+            from: '/docs/proxy/deploy_cloud',
+            to: '/docs/proxy/deploy',
+          },
+          {
+            from: '/docs/proxy/microservices_helm',
+            to: '/docs/proxy/deploy#deploy-with-helm',
+          },
+          {
+            from: '/docs/proxy/db_deadlocks',
+            to: '/docs/proxy/prod#redis-transaction-buffer',
+          },
+          {
+            from: '/docs/proxy/ui_credentials',
+            to: '/docs/proxy/model_management#reusable-provider-credentials',
+          },
+          {
+            from: '/docs/proxy/ui_store_model_db_setting',
+            to: '/docs/proxy/model_management#database-vs-configyaml-models',
+          },
+          {
+            from: '/docs/router_architecture',
+            to: '/docs/proxy/architecture#the-router-fallbacks-and-retries',
+          },
+          {
+            from: '/docs/proxy/image_handling',
+            to: '/docs/proxy/architecture#image-url-handling',
+          },
+          {
+            from: '/docs/observability/langfuse_otel_integration',
+            to: '/docs/observability/opentelemetry_v2#2-send-traces-to-a-specific-tool-presets',
+          },
+          {
+            from: '/docs/observability/telemetry',
+            to: '/docs/observability/opentelemetry_v2',
+          },
+        ],
+      },
+    ],
+    require('./plugins/docs-search'),
+    [
+      '@docusaurus/plugin-ideal-image',
+      {
+        quality: 75,
+        max: 1280,
+        min: 640,
+        steps: 2,
+        disableInDev: false,
+      },
+    ],
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'release-notes',
+        path: './release_notes',
+        routeBasePath: 'release_notes',
+        sidebarPath: require.resolve('./sidebars-release-notes.js'),
+        async sidebarItemsGenerator({defaultSidebarItemsGenerator, docs, ...args}) {
+          const items = await defaultSidebarItemsGenerator({docs, ...args});
+
+          // Build map of doc id -> year from frontmatter date
+          const docYearMap = {};
+          for (const doc of docs) {
+            const date = doc.frontMatter && doc.frontMatter.date;
+            if (date) {
+              const year = new Date(date).getFullYear();
+              docYearMap[doc.id] = year;
+            }
+          }
+
+          function parseVersion(str) {
+            const match = (str || '').match(/v?(\d+)\.(\d+)\.(\d+)/);
+            if (!match) return [0, 0, 0];
+            return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+          }
+          function compareVersionsDesc(a, b) {
+            const [aMaj, aMin, aPatch] = parseVersion(a.label || a.id || '');
+            const [bMaj, bMin, bPatch] = parseVersion(b.label || b.id || '');
+            if (bMaj !== aMaj) return bMaj - aMaj;
+            if (bMin !== aMin) return bMin - aMin;
+            return bPatch - aPatch;
+          }
+
+          // Flatten and transform doc items (filter index, shorten labels)
+          function flattenDocs(list) {
+            const result = [];
+            for (const item of list) {
+              if (item.type === 'doc' && item.id === 'index') continue;
+              if (item.type === 'doc') {
+                const label = item.id.replace(/\/index$/, '');
+                result.push({...item, label});
+              } else if (item.type === 'category') {
+                if (item.link && item.link.type === 'doc' && item.link.id !== 'index') {
+                  const id = item.link.id;
+                  const label = id.replace(/\/index$/, '');
+                  result.push({type: 'doc', id, label});
+                } else {
+                  result.push(...flattenDocs(item.items));
+                }
+              }
+            }
+            return result;
+          }
+
+          const docItems = flattenDocs(items);
+
+          const byYear = {};
+          for (const item of docItems) {
+            const year = docYearMap[item.id] || 'Other';
+            if (!byYear[year]) byYear[year] = [];
+            byYear[year].push(item);
+          }
+
+          function buildMinorCategories(yearItems, expandNewest) {
+            const byMinor = {};
+            for (const item of yearItems) {
+              const [maj, min] = parseVersion(item.label || item.id || '');
+              const key = `v${maj}.${min}.x`;
+              if (!byMinor[key]) byMinor[key] = {maj, min, items: []};
+              byMinor[key].items.push(item);
+            }
+            const keys = Object.keys(byMinor);
+            for (const key of keys) byMinor[key].items.sort(compareVersionsDesc);
+            keys.sort((a, b) =>
+              (byMinor[b].maj - byMinor[a].maj) || (byMinor[b].min - byMinor[a].min));
+            return keys.map((key, idx) => ({
+              type: 'category',
+              label: key,
+              collapsed: !(expandNewest && idx === 0),
+              items: byMinor[key].items,
+            }));
+          }
+
+          const years = Object.keys(byYear).sort(
+            (a, b) => Number.parseInt(b, 10) - Number.parseInt(a, 10),
+          );
+          return years.map((year, idx) => ({
+            type: 'category',
+            label: String(year),
+            collapsed: year !== String(years[0]),
+            items: buildMinorCategories(byYear[year], idx === 0),
+          }));
+        },
+      },
+    ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'blog',
+        path: './blog',
+        routeBasePath: 'blog',
+        blogTitle: 'Blog',
+        blogSidebarTitle: 'All Posts',
+        blogSidebarCount: 'ALL',
+        postsPerPage: 'ALL',
+        showReadingTime: false,
+        sortPosts: 'descending',
+        include: ['**/index.{md,mdx}'],
+        remarkPlugins: [require('./src/remark/raw-markdown')],
+        rehypePlugins: [require('./src/rehype/table-cell-labels')],
+        onInlineAuthors: 'throw',
+        onUntruncatedBlogPosts: 'throw',
+        feedOptions: {
+          // Every post, so feed readers get every post's tags. Full text is
+          // trimmed to the newest 50 in src/feed/card-categories.js.
+          limit: false,
+          createFeedItems: require('./src/feed/card-categories').createFeedItems,
+        },
+      },
+    ],
+
+    // PostHog product analytics. Same project as the Webflow marketing site
+    // (www.linten.ai), so a visitor moving between the two domains is one
+    // person and one journey: persistence keeps a first-party cookie on
+    // .linten.ai, which every linten.ai subdomain can read.
+    // Uses the official posthog-docusaurus plugin, which is production-only
+    // by default (mirroring the gtag setup below) and forwards every extra
+    // option below to posthog.init via JSON.stringify.
+    //
+    // capture_pageview is false because the plugin ships a client module whose
+    // onRouteUpdate captures $pageview on the initial load and on every
+    // Docusaurus route change. Leaving the SDK's own pageview on as well logs
+    // every landing page twice.
+    //
+    // $pageleave and dead clicks are on for docs UX analysis: time on page,
+    // bounce rate and scroll depth, plus clicks on things readers expect to be
+    // links. capture_pageleave must be an explicit true, since the SDK default
+    // only captures it when capture_pageview is on.
+    //
+    // Kept off the docs on purpose, so this stays analytics and nothing else:
+    // no session replay (no rrweb bundle downloaded, no DOM observation;
+    // replay is scoped to linten.ai/enterprise and /pricing by URL trigger in
+    // the project settings), no heatmap capture despite the project-level
+    // opt-in (skips the mousemove listener and its periodic requests; link and
+    // button clicks are already captured with their hrefs by autocapture).
+    // Surveys are off too, which drops the surveys.js request the SDK
+    // otherwise makes on every page; docs feedback already goes through
+    // Feedback Rocket below.
+    [
+      'posthog-docusaurus',
+      {
+        apiKey: 'phc_upsFA5iBuDFKnznEdV9pA5HYW8fwsLMJ8pF2p4xZzzpD',
+        appUrl: 'https://us.i.posthog.com',
+        enableInDevelopment: false,
+        defaults: '2026-05-30',
+        person_profiles: 'identified_only',
+        cross_subdomain_cookie: true,
+        capture_pageview: false,
+        capture_pageleave: true,
+        capture_dead_clicks: true,
+        disable_session_recording: true,
+        capture_heatmaps: false,
+        disable_surveys: true,
+        autocapture: {
+          dom_event_allowlist: ['click'],
+          element_allowlist: ['a', 'button'],
+        },
+      },
+    ],
+    // Ensure gtag exists before the GA script loads.
+    () => ({
+      name: 'gtag-shim',
+      injectHtmlTags() {
+        return {
+          headTags: [
+            {
+              tagName: 'script',
+              innerHTML: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}if(!window.gtag){window.gtag=gtag;}`,
+            },
+          ],
+        };
+      },
+    }),
+  ],
+
+  presets: [
+    [
+      'classic',
+      /** @type {import('@docusaurus/preset-classic').Options} */
+      ({
+        gtag:
+          process.env.NODE_ENV === 'production'
+            ? {
+                // Two GA4 destinations. G-K7K215ZVNC is the docs property and
+                // stays first: plugin-google-gtag uses trackingID[0] for the
+                // gtag.js loader URL and emits one gtag('config', ...) per id.
+                // G-G3LG9H6J6B is the canonical linten.ai property, also on the
+                // Webflow marketing site, so a visitor moving between
+                // www.linten.ai and docs.linten.ai stays in one session.
+                trackingID: ['G-K7K215ZVNC', 'G-G3LG9H6J6B'],
+                anonymizeIP: true,
+              }
+            : undefined,
+        docs: {
+          sidebarPath: require.resolve('./sidebars.js'),
+          beforeDefaultRemarkPlugins: [require('./src/remark/docs-models')],
+          remarkPlugins: [require('./src/remark/raw-markdown')],
+        },
+        blog: false, // Disable the default blog plugin from preset-classic
+        pages: {
+          beforeDefaultRemarkPlugins: [require('./src/remark/docs-models')],
+        },
+        theme: {
+          customCss: [require.resolve('./src/css/custom.css'), require.resolve('./src/css/logo-shape.css')],
+        },
+      }),
+    ],
+  ],
+
+  future: {
+    experimental_faster: {
+      swcJsLoader: true,
+      swcJsMinimizer: true,
+      // Keep explicit <head> tags and quoted metadata for social previews.
+      swcHtmlMinimizer: false,
+      lightningCssMinimizer: true,
+      mdxCrossCompilerCache: true,
+    },
+  },
+
+  themes: ['@docusaurus/theme-mermaid'],
+  markdown: {
+    mermaid: true,
+  },
+
+  scripts: [
+    {
+      async: true,
+      src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
+      'data-fr-id': 'GQwepB0f0L-x_ZH63kR_V',
+      'data-fr-theme': 'dynamic',
+    }
+  ],
+
+  themeConfig:
+    /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
+    ({
+      // Google Search Console ownership token. Public by design; keep it so the property stays verified.
+      // It lives here, not in headTags, so it renders near <title>. headTags land after inline
+      // scripts whose strings contain "<div>", and Google's verifier then decides <head> has ended.
+      metadata: [{name: 'google-site-verification', content: '2ECVUxrDhV_G5feehdJNQuTA4dEJbE9R918TbGTwJI8'}],
+      // Replace with your project's social card
+      image: 'img/docusaurus-social-card.png',
+      // The whole bar links to the page; the close button still works.
+      // Entries live in src/announcements.js and are rotated by
+      // src/theme/AnnouncementBar/Content, which also drops an entry once its
+      // expiresAt passes. `content` is required by the theme schema but is not
+      // rendered; it holds the evergreen entry so the config still reads true.
+      // Bump `id` to resurface the bar for readers who dismissed the last one.
+      announcementBar: {
+        id: 'decisions_api_gemini_2026_11',
+        content:
+          '<a class="announcement-link" href="/docs/decisions"><strong>Decisions API is here.</strong> Call Gemini Decision 1, Jev, Clef or any decision model through one /v1/decisions endpoint. &rarr;</a>',
+        isCloseable: true,
+      },
+      docs: {
+        sidebar: {
+          // Collapse chevron at the bottom of the sidebar; see src/theme/DocSidebar
+          hideable: true,
+        },
+      },
+      navbar: {
+        // Primary logo (monogram + wordmark): blue on light, white on dark,
+        // per the logo guidelines. The wordmark-only secondary logo ships in
+        // white only, so it cannot sit on the light header.
+        // Shown beside the logo as a "DOCS" label (styled in logo-shape.css)
+        title: 'Docs',
+        logo: {
+          alt: 'Linten',
+          src: '/img/brand/linten-logo-blue.png',
+          srcDark: '/img/brand/linten-logo-white.png',
+          width: 132,
+          height: 25,
+        },
+        items: [
+          {
+            type: 'custom-productsMenu',
+            label: 'Products',
+            position: 'left',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'tutorialSidebar',
+            position: 'left',
+            label: 'Docs',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'providersSidebar',
+            position: 'left',
+            label: 'AI Providers',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'integrationsSidebar',
+            position: 'left',
+            label: 'Integrations',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'enterpriseSidebar',
+            position: 'left',
+            label: 'Enterprise',
+          },
+          { to: '/release_notes', label: 'Changelog', position: 'left' },
+          { to: '/blog', label: 'Blog', position: 'left' },
+          { to: '/rust-migration', label: 'Rust', position: 'left' },
+          {
+            href: 'https://github.com/LintenAI/linten',
+            position: 'right',
+            className: 'header-github-link',
+            'aria-label': 'GitHub repository',
+          },
+          {
+            href: 'https://discord.com/invite/wuPM9dRgDw',
+            position: 'right',
+            className: 'header-discord-link',
+            'aria-label': 'Discord community',
+          },
+        ],
+      },
+      footer: {
+        style: 'dark',
+        links: [
+          {
+            title: 'Product',
+            items: [
+              {label: 'Gateway quickstart', to: '/docs/proxy/docker_quick_start'},
+              {label: 'Python SDK', to: '/docs/python_sdk'},
+              {label: 'Production deployment', to: '/docs/proxy/deploy'},
+              {label: 'MCP Gateway', to: '/docs/mcp'},
+              {label: 'Agent Gateway', to: '/docs/a2a'},
+              {label: 'Rust migration', to: '/rust-migration'},
+              {label: 'Enterprise', to: '/docs/enterprise'},
+            ],
+          },
+          {
+            title: 'Resources',
+            items: [
+              {label: 'Blog', to: '/blog'},
+              {label: 'Changelog', to: '/release_notes'},
+              {label: 'Agent resources', to: '/docs/agent_resources'},
+              {label: 'llms.txt', href: 'https://docs.linten.ai/llms.txt'},
+              {label: 'Trust Center', href: 'https://trust.linten.ai/'},
+            ],
+          },
+          {
+            title: 'Community',
+            items: [
+              {label: 'GitHub', href: 'https://github.com/LintenAI/linten/'},
+              {label: 'Discord', href: 'https://discord.com/invite/wuPM9dRgDw'},
+              {label: 'Slack', href: 'https://lintenossslack.slack.com/'},
+              {label: 'YouTube', href: 'https://www.youtube.com/@LintenAIGateway'},
+              {label: 'X', href: 'https://twitter.com/Linten'},
+              {label: 'LinkedIn', href: 'https://www.linkedin.com/company/berri-ai/'},
+            ],
+          },
+          {
+            title: 'Company',
+            items: [
+              {label: 'linten.ai', href: 'https://www.linten.ai/'},
+              {label: 'Talk to sales', href: 'https://www.linten.ai/enterprise#talk-to-sales'},
+              {label: 'Careers', href: 'https://jobs.ashbyhq.com/linten'},
+            ],
+          },
+        ],
+        copyright: `© ${new Date().getFullYear()} Linten`,
+      },
+      colorMode: {
+        defaultMode: 'light',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
+      },
+      prism: {
+        theme: lightCodeTheme,
+        darkTheme: darkCodeTheme,
+      },
+    }),
+};
+
+module.exports = config;

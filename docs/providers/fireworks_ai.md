@@ -1,0 +1,825 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Fireworks AI
+
+
+:::info
+**We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests**
+:::
+
+:::tip
+New to running Fireworks AI behind Linten? [Getting Started with Fireworks AI on Linten](/blog/fireworks-getting-started) goes from an empty directory to a working request, then adds a second model and a fallback.
+:::
+
+| Property | Details |
+|-------|-------|
+| Description | The fastest and most efficient inference engine to build production-ready, compound AI systems. |
+| Provider Route on Linten | `fireworks_ai/` |
+| Provider Doc | [Fireworks AI ↗](https://docs.fireworks.ai/getting-started/introduction) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/responses`, `/embeddings`, `/completions`, `/audio/transcriptions`, `/rerank` |
+
+
+## Overview
+
+This guide explains how to integrate Linten with Fireworks AI. You can connect to Fireworks AI in three main ways:
+
+1. <b> Using Fireworks AI serverless models </b> – Easy connection to Fireworks-managed models.
+2. <b> Connecting to a model in your own Fireworks account </b> – Access models that are hosted within your Fireworks account.
+3. <b> Connecting via a direct-route deployment </b> – A more flexible, customizable connection to a specific Fireworks instance.
+
+
+## API Key
+```python
+# env variable
+os.environ['FIREWORKS_AI_API_KEY']
+```
+
+## Sample Usage - Serverless Models
+```python
+from linten import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = ""
+response = completion(
+    model="fireworks_ai/glm-5p3-flash", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+)
+print(response)
+```
+
+A bare serverless slug like `glm-5p3-flash` is expanded to `accounts/fireworks/models/glm-5p3-flash` for you, so you can pass either the short slug or the full resource id.
+
+## Sample Usage - Serverless Models - Streaming
+```python
+from linten import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = ""
+response = completion(
+    model="fireworks_ai/glm-5p3-flash", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
+```
+
+## Sample Usage -  Models in Your Own Fireworks Account 
+```python
+from linten import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = ""
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/YOUR_MODEL_ID", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+)
+print(response)
+```
+
+## Sample Usage - Direct-Route Deployment
+```python
+from linten import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = "YOUR_DIRECT_API_KEY"
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash#accounts/gitlab/deployments/2fb7764c", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+   api_base="https://gitlab-2fb7764c.direct.fireworks.ai/v1"
+)
+print(response)
+```
+
+> **Note:** The above is for the chat interface, if you want to use the text completion interface it's model="text-completion-openai/accounts/fireworks/models/deepseek-v4p1-flash#accounts/gitlab/deployments/2fb7764c"
+
+
+## Sample Usage - Routers
+
+Fireworks routers are served at `accounts/fireworks/routers/<router-id>` rather than `accounts/fireworks/models/<model-id>`, so a bare slug alone cannot tell Linten which one you mean. Prefix the slug with `routers/` to target a router; Linten expands `routers/<id>` to `accounts/fireworks/routers/<id>`. See the [Fireworks routers docs](https://docs.fireworks.ai/deployments/routers) for the routers available on your account.
+
+```python
+from linten import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = ""
+response = completion(
+    model="fireworks_ai/routers/glm-latest",
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+)
+print(response)
+```
+
+The full resource id (`fireworks_ai/accounts/fireworks/routers/glm-latest`) is still accepted if you prefer to be explicit. Slugs ending in `-fast` (for example `fireworks_ai/glm-5p3-fast`) are treated as routers even without the `routers/` prefix.
+
+## FireRouter and open-model routers
+
+[FireRouter](https://docs.fireworks.ai/nexus/firerouter) is Fireworks' managed router. Instead of pointing at one model, a router ID picks a model for each user turn. Fireworks serves routers under `accounts/fireworks/routers/<id>`, and Linten accepts the short ID or the full resource path:
+
+| Router ID | What it routes across | Linten model |
+| - | - | - |
+| `auto` | Fireworks open models, chosen by Fireworks | `fireworks_ai/auto` |
+| `auto-instant` | Fireworks open models, tuned for the lowest latency | `fireworks_ai/auto-instant` |
+| `firerouter` | Claude Opus or GPT, plus the Fireworks open-model mix | `fireworks_ai/firerouter` |
+| `firerouter/<models>` | Only the models you list, such as `firerouter/opus` or `firerouter/kimi-k3/glm-5p3` | `fireworks_ai/firerouter/kimi-k3/glm-5p3` |
+| any of the above | Same router, spelled out | `fireworks_ai/accounts/fireworks/routers/<id>` |
+
+`auto` and `auto-instant` only use Fireworks open models, so your Fireworks API key is the only credential they need. `firerouter/auto` and `firerouter/auto-instant` behave the same way. See [Example router IDs](https://docs.fireworks.ai/nexus/firerouter#example-router-ids) for more routes
+
+The full resource path works on every Linten version. The short `firerouter` IDs work <SinceVersion v="1.104.0" /> (first in `v1.104.0-rc.1`), and the short `auto` and `auto-instant` IDs work <SinceVersion v="1.105.0" />. On older versions a short ID is sent as a model path and Fireworks returns a 404, so use the full path there
+
+```yaml
+model_list:
+  - model_name: auto
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/routers/auto
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+  - model_name: firerouter
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/routers/firerouter
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+```
+
+```bash
+curl -X POST http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LINTEN_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "auto", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+### Which model served the request
+
+The proxy returns the `model_name` you configured, such as `auto`, in the response `model` field. On the SDK, a non-streaming `completion()` reports the served model in `response.model`, for example `fireworks_ai/glm-5p3-flash`. A streamed response keeps the requested router ID in `model` and puts the served model in `response._hidden_params["provider_response_model"]`
+
+### Closed-model credentials
+
+Fireworks does not resell closed models. When a `firerouter` route includes Claude or GPT, Fireworks calls that provider under your own account, using either [Provider Keys](https://docs.fireworks.ai/nexus/provider-keys) stored on your Fireworks account or an `x-anthropic-api-key` or `x-openai-api-key` header on the request. A header takes precedence over a stored Provider Key
+
+If no credential is available for a closed model, FireRouter leaves it out and serves the turn with the other models in the route. For example, `firerouter/opus` without an Anthropic credential is served by Fireworks open models. You get `400 no_credential` instead when you send `x-routing-preference: 1`, which forces the route's closed primary, or when you call a closed model ID directly
+
+To send the header from Linten, set it on the deployment with `linten_params.extra_headers`, or let each client send its own by enabling `forward_client_headers_to_llm_api` globally or per model group
+
+```yaml
+model_list:
+  - model_name: firerouter
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/routers/firerouter
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+      extra_headers:
+        x-anthropic-api-key: os.environ/ANTHROPIC_API_KEY
+```
+
+```yaml
+general_settings:
+  forward_client_headers_to_llm_api: true
+# or per model group:
+# model_group_settings:
+#   forward_client_headers_to_llm_api: [firerouter]
+```
+
+The same headers go through the SDK on `completion()`:
+
+```python
+from linten import completion
+
+response = completion(
+    model="fireworks_ai/firerouter",
+    messages=[{"role": "user", "content": "hello"}],
+    extra_headers={"x-anthropic-api-key": "sk-ant-..."},
+)
+```
+
+### Routing preference
+
+`x-routing-preference` sets how strongly a `firerouter` request favors its primary model or cheaper models, from `1` (max intelligence) to `5` (max savings). The default is `3`. See [Routing Preferences](https://docs.fireworks.ai/nexus/routing-preferences). It travels the same way as the credential headers: `linten_params.extra_headers` on the deployment, client-supplied when `forward_client_headers_to_llm_api` is on, or `extra_headers` on `completion()`
+
+### Cost tracking
+
+Linten prices each request off the model Fireworks reports it routed to, so a router has no price of its own. Fireworks-hosted models are billed at Fireworks rates, and closed models (for example a Claude turn) are billed at that provider's own list price. The charges land on two vendor bills, Fireworks for open models and Anthropic or OpenAI for closed ones, but Linten spend logs and budgets add both up under the one model group
+
+## Usage with Linten Proxy 
+
+### 1. Set Fireworks AI Models on config.yaml
+
+```yaml
+model_list:
+  - model_name: fireworks-glm-5p3
+    linten_params:
+      model: fireworks_ai/glm-5p3-flash
+      api_key: "os.environ/FIREWORKS_AI_API_KEY"
+```
+
+### 2. Start Proxy 
+
+```
+linten --config config.yaml
+```
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fireworks-glm-5p3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(model="fireworks-glm-5p3", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the Linten Proxy
+    model = "fireworks-glm-5p3",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from linten. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+## Decisions (System One)
+
+Fireworks serves its decision model, `accounts/fireworks/routers/rune`, on `https://api.fireworks.ai/inference/v1/systemone`. It is in private preview, so ask your Fireworks account team to enable it; the model name they give you may differ. Linten exposes it on both [`/v1/systemone` and `/v1/decisions`](../decisions.md): the System One route forwards the `state` plus `questions` body as is, and the OpenAI-format route is translated into the same request. The model accepts text only and is billed on input tokens, with a lower rate for `cached_input_tokens`, which Linten records as cached tokens for cost tracking
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from linten import systemone
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+response = systemone(
+    model="fireworks_ai/accounts/fireworks/routers/rune",
+    state={"tool_name": "Bash", "tool_input": "rm -rf ./build", "user_request": "clean the build dir"},
+    questions={
+        "allowed": {"type": "noul", "instructions": "Is this tool call safe to run without asking the user?"},
+        "risk": {"type": "score", "instructions": "How risky is this tool call?", "criteria": ["none", "low", "medium", "high"]},
+    },
+)
+print(response.answers)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: rune
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/routers/rune
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+```
+
+```bash
+curl http://0.0.0.0:4000/v1/systemone \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rune",
+    "state": {"tool_name": "Bash", "tool_input": "rm -rf ./build", "user_request": "clean the build dir"},
+    "questions": {
+      "allowed": {"type": "noul", "instructions": "Is this tool call safe to run without asking the user?"}
+    }
+  }'
+```
+
+The same deployment answers OpenAI-format requests on `/v1/decisions`:
+
+```bash
+curl http://0.0.0.0:4000/v1/decisions \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rune",
+    "input": "Customer wrote: the package arrived late and damaged, I want my money back.",
+    "questions": [
+      {"type": "predicate", "name": "refund", "instructions": "Does the customer ask for a refund?"},
+      {"type": "choice", "name": "tone", "instructions": "What is the tone?", "choices": [{"value": "angry"}, {"value": "neutral"}, {"value": "positive"}]}
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## Responses API
+
+`fireworks_ai/` models on `/v1/responses` go straight to Fireworks' native `https://api.fireworks.ai/inference/v1/responses` endpoint, so server-side features such as MCP tools (`"type": "mcp"`), `previous_response_id`, and reasoning output items work the same as they do against Fireworks directly
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from linten import responses
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+response = responses(
+    model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+    input="Use the deepwiki MCP server to tell me in one sentence what the LintenAI/linten repository is.",
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.deepwiki.com/mcp",
+            "require_approval": "never",
+        }
+    ],
+)
+print(response.output)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: fireworks-kimi-k3
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/models/kimi-k3
+      api_key: "os.environ/FIREWORKS_AI_API_KEY"
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "fireworks-kimi-k3",
+    "input": "Use the deepwiki MCP server to tell me in one sentence what the LintenAI/linten repository is.",
+    "tools": [
+      {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never"
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+Multi-turn tool calling works the same way it does against Fireworks directly: send back the `function_call_output` items together with the `previous_response_id` Fireworks returned, and Fireworks continues the conversation server-side
+
+`developer` input items are not sent to Fireworks as messages, since Fireworks' Responses API has no developer role on models such as kimi-k3 and qwen3.8. Linten folds the request's `instructions`, the leading `system` and `developer` items and every later text `developer` item into the top-level `instructions` field, so a model whose chat template needs the system message first (qwen3.8) accepts a developer item placed after the first input item. A deployment that declares `supports_mid_conversation_system: true` in its own `model_info` gets each `developer` item as a `system` item in place instead. The same request through the chat completions bridge (`use_chat_completions_api: true`) follows the [developer role](../completion/developer_role.md) rules, which move a later `developer` message only for a model that declares `supports_mid_conversation_system: false`.
+
+## Document Inlining 
+
+Linten supports document inlining for Fireworks AI models. This is useful for models that are not vision models, but still need to parse documents/images/etc.
+
+Linten will add `#transform=inline` to the url of the image_url, if the model is not a vision model.[**See Code**](https://github.com/LintenAI/linten/blob/1ae9d45798bdaf8450f2dfdec703369f3d2212b7/linten/llms/fireworks_ai/chat/transformation.py#L114)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
+
+completion = linten.completion(
+    model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What are the candidate's BA and MBA GPAs?",
+                },
+            ],
+        }
+    ],
+)
+print(completion)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: llama-v3p3-70b-instruct
+    linten_params:
+      model: fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+    #   api_base: os.environ/FIREWORKS_AI_API_BASE [OPTIONAL], defaults to "https://api.fireworks.ai/inference/v1"
+```
+
+2. Start Proxy
+
+```
+linten --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer YOUR_API_KEY' \
+-d '{"model": "llama-v3p3-70b-instruct", 
+    "messages": [        
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What are the candidate's BA and MBA GPAs?",
+                },
+            ],
+        }
+    ]}'
+```
+
+</TabItem>
+</Tabs>
+
+### Disable Auto-add
+
+If you want to disable the auto-add of `#transform=inline` to the url of the image_url, set `disable_add_transform_inline_image_block` to `True`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+linten.disable_add_transform_inline_image_block = True
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+linten_settings:
+    disable_add_transform_inline_image_block: true
+```
+
+</TabItem>
+</Tabs>
+
+## Reasoning Effort
+
+The `reasoning_effort` parameter is supported on select Fireworks AI models. Supported models include:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/qwen3-8b",
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    reasoning_effort="low",
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "fireworks_ai/accounts/fireworks/models/qwen3-8b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## User and Session Attribution
+
+Fireworks can tell apart the developers behind a shared Fireworks API key when Linten sends two identifiers on each request
+
+| Identifier | Linten source | Sent to Fireworks as |
+|---|---|---|
+| User id | `user_id` of the virtual key that made the request | `user` field in the request body |
+| Session id | `x-linten-session-id` header, `linten_session_id`, or `metadata.session_id` | `x-session-affinity` header |
+
+### Session id
+
+`fireworks_ai/` deployments send the session id as `x-session-affinity` on `/v1/chat/completions` (streaming included), `/v1/responses` and `/v1/messages`, so every request in one session reaches the same Fireworks replica and reuses its prompt cache. No configuration is needed
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -H "x-linten-session-id: my-session-1" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "fireworks-glm-5p2", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+When the request has no session id, or the proxy generated one because of `general_settings.missing_session_id`, no `x-session-affinity` header is sent. A client that sends its own `x-session-affinity` header keeps that value. For a Fireworks model behind the `openai/` prefix, set `provider_affinity_header: x-session-affinity` in that deployment's `linten_params`
+
+### User id
+
+Set `fireworks_forward_user_id: true` on a deployment to send the Linten user id as Fireworks' `user` field. It is off by default because user ids are often email addresses
+
+```yaml
+model_list:
+  - model_name: fireworks-glm-5p2
+    linten_params:
+      model: fireworks_ai/glm-5p2
+      api_key: "os.environ/FIREWORKS_AI_API_KEY"
+      fireworks_forward_user_id: true
+```
+
+To turn it on from the Admin UI, open the model on the Models page, click **Edit Settings**, and add `"fireworks_forward_user_id": true` to **Linten Params**
+
+It applies to `/v1/chat/completions` (streaming included), `/v1/responses` and `/v1/messages` on `fireworks_ai/` deployments. The value is the `user_id` of the virtual key, so two developers sharing one Fireworks API key show up as two users, and requests made with the master key send the proxy admin id, `default_user_id`. Fireworks echoes `user` back in `/v1/responses` replies, so the developer sees their own user id there
+
+The Linten user id replaces any `user` the client sent (and `metadata.user_id` on `/v1/messages`) as well as the key hash that `linten_settings.overwrite_user_with_key_hash` would send, and a request that tries to set `fireworks_forward_user_id` itself is rejected, so developers cannot change their own attribution. When the key has no `user_id`, Linten leaves the request as it is and a client-supplied `user` is still forwarded. To stop such keys from choosing their own `user`, also set `linten_settings.overwrite_user_with_key_hash: true`, which sends the key hash for them while keys with a `user_id` still send the user id
+
+## Supported Models - ALL Fireworks AI Models Supported!
+
+:::info
+We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests
+:::
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| glm-5p3-flash | `completion(model="fireworks_ai/glm-5p3-flash", messages)` |
+| deepseek-v4-pro | `completion(model="fireworks_ai/deepseek-v4-pro", messages)` |
+| kimi-k3 | `completion(model="fireworks_ai/kimi-k3", messages)` |
+| qwen3p8-max | `completion(model="fireworks_ai/qwen3p8-max", messages)` |
+| minimax-m3 | `completion(model="fireworks_ai/minimax-m3", messages)` |
+| gpt-oss-120b | `completion(model="fireworks_ai/gpt-oss-120b", messages)` |
+
+The table above is a small selection of popular models. For the full, current list of models and routers, see the [Fireworks model library](https://fireworks.ai/models).
+
+## Latest model aliases
+
+<SinceVersion v="1.109.0" />
+
+`fireworks_ai/<family>-latest` names follow a model family as Linten moves them to newer models, so your application keeps one model string. Use them like any other Fireworks AI model name. Linten sends Fireworks AI the current target model and bills at that model's price. See [Latest model aliases](../model_latest_aliases.md) for how aliases work and the full list across providers.
+
+| Alias | Model family |
+| --- | --- |
+| `fireworks_ai/kimi-latest` | Kimi |
+| `fireworks_ai/minimax-latest` | MiniMax |
+
+## Supported Embedding Models
+
+:::info
+We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending embedding requests
+:::
+
+| Model Name            | Function Call                                                   |
+|-----------------------|-----------------------------------------------------------------|
+| fireworks_ai/nomic-ai/nomic-embed-text-v1.5 | `response = linten.embedding(model="fireworks_ai/nomic-ai/nomic-embed-text-v1.5", input=input_text)` |
+| fireworks_ai/nomic-ai/nomic-embed-text-v1 | `response = linten.embedding(model="fireworks_ai/nomic-ai/nomic-embed-text-v1", input=input_text)` |
+| fireworks_ai/WhereIsAI/UAE-Large-V1 | `response = linten.embedding(model="fireworks_ai/WhereIsAI/UAE-Large-V1", input=input_text)` |
+| fireworks_ai/thenlper/gte-large | `response = linten.embedding(model="fireworks_ai/thenlper/gte-large", input=input_text)` |
+| fireworks_ai/thenlper/gte-base | `response = linten.embedding(model="fireworks_ai/thenlper/gte-base", input=input_text)` |
+
+
+## Audio Transcription
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import transcription
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
+
+audio_file = open("/path/to/audio.wav", "rb")
+
+response = transcription(
+    model="fireworks_ai/whisper-v3",
+    file=audio_file,
+)
+```
+
+[Pass API Key/API Base in `.transcription`](../set_keys.md#passing-args-to-completion-or-any-linten-endpoint---transcription-embedding-text_completion-etc)
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: whisper-v3
+    linten_params:
+      model: fireworks_ai/whisper-v3
+      api_base: https://audio-prod.api.fireworks.ai/v1
+      api_key: os.environ/FIREWORKS_API_KEY
+    model_info:
+      mode: audio_transcription
+```
+
+2. Start Proxy
+
+```
+linten --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/audio/transcriptions' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-F 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
+-F 'model="whisper-v3"' \
+-F 'response_format="verbose_json"' \
+```
+
+</TabItem>
+</Tabs>
+
+## Rerank
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import rerank
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+query = "What is the capital of France?"
+documents = [
+    "Paris is the capital and largest city of France, home to the Eiffel Tower and the Louvre Museum.",
+    "France is a country in Western Europe known for its wine, cuisine, and rich history.",
+    "The weather in Europe varies significantly between northern and southern regions.",
+    "Python is a popular programming language used for web development and data science.",
+]
+
+response = rerank(
+    model="fireworks_ai/fireworks/qwen3-reranker-8b",
+    query=query,
+    documents=documents,
+    top_n=3,
+    return_documents=True,
+)
+print(response)
+```
+
+[Pass API Key/API Base in `.rerank`](../set_keys.md#passing-args-to-completion-or-any-linten-endpoint---transcription-embedding-text_completion-etc)
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: qwen3-reranker-8b
+    linten_params:
+      model: fireworks_ai/fireworks/qwen3-reranker-8b
+      api_key: os.environ/FIREWORKS_API_KEY
+    model_info:
+      mode: rerank
+```
+
+2. Start Proxy
+
+```
+linten --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-reranker-8b",
+    "query": "What is the capital of France?",
+    "documents": [
+        "Paris is the capital and largest city of France, home to the Eiffel Tower and the Louvre Museum.",
+        "France is a country in Western Europe known for its wine, cuisine, and rich history.",
+        "The weather in Europe varies significantly between northern and southern regions.",
+        "Python is a popular programming language used for web development and data science."
+    ],
+    "top_n": 3,
+    "return_documents": true
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Models
+
+| Model Name | Function Call |
+|------------|---------------|
+| fireworks/qwen3-reranker-8b | `rerank(model="fireworks_ai/fireworks/qwen3-reranker-8b", query=query, documents=documents)` |

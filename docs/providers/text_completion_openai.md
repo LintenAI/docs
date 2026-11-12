@@ -1,0 +1,156 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# OpenAI (Text Completion)
+
+Linten supports OpenAI text completion models
+
+:::note
+
+OpenAI's model pages list the legacy Completions endpoint as not supported for current models. gpt-5.4, gpt-5.4-mini and gpt-5.4-nano still answer there as of October 2026, while gpt-5.5 and later answer 404. These are chat models, so the endpoint continues your prompt as plain text instead of replying to it, and the text can include the model's internal formatting tokens. Linten does not track spend on this route yet. For chat-style answers and spend tracking, use the `openai/` prefix, which also serves [`/completions`](../text_completion.md) requests.
+
+:::
+
+### Required API Keys
+
+```python
+import os 
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+```
+
+### Usage
+```python keep-model-ids
+import os 
+from linten import completion
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+# openai call
+response = completion(
+    model = "text-completion-openai/gpt-5.4-mini", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+### Usage - Linten Proxy Server
+
+Here's how to call OpenAI models with the Linten Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export OPENAI_API_KEY=""
+```
+
+### 2. Start the proxy 
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+
+```yaml keep-model-ids
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: openai/{{openai_small}}                          # The `openai/` prefix will call openai.chat.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5.4-mini-completions
+    linten_params:
+      model: text-completion-openai/gpt-5.4-mini # The `text-completion-openai/` prefix will call openai.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+```
+</TabItem>
+<TabItem value="config-*" label="config.yaml - proxy all OpenAI models">
+
+Use this to add all openai models with one API Key. **WARNING: This will not do any load balancing**
+This means requests to `{{openai_large}}`, `{{openai_small}}` will all go through this route 
+
+```yaml
+model_list:
+  - model_name: "*"             # all requests where model not in your config go to this deployment
+    linten_params:
+      model: openai/*           # set `openai/` to use the openai route
+      api_key: os.environ/OPENAI_API_KEY
+```
+</TabItem>
+<TabItem value="cli" label="CLI">
+
+```bash keep-model-ids
+$ linten --model text-completion-openai/gpt-5.4-mini
+
+# Server running on http://0.0.0.0:4000
+```
+</TabItem>
+
+</Tabs>
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell keep-model-ids
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-5.4-mini-completions",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python keep-model-ids
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(model="gpt-5.4-mini-completions", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python keep-model-ids
+from langchain_openai import OpenAI
+
+llm = OpenAI(
+    base_url="http://0.0.0.0:4000", # set base_url to the Linten Proxy
+    api_key="anything",
+    model="gpt-5.4-mini-completions",
+    temperature=0.1
+)
+
+response = llm.invoke("test from linten. tell me why it's amazing in 1 sentence")
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
+## OpenAI Text Completion Models / Instruct Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-5.4             | `response = completion(model="text-completion-openai/gpt-5.4", messages=messages)` |
+| gpt-5.4-mini        | `response = completion(model="text-completion-openai/gpt-5.4-mini", messages=messages)` |
+| gpt-5.4-nano        | `response = completion(model="text-completion-openai/gpt-5.4-nano", messages=messages)` |
+
+OpenAI shuts down gpt-5.4-nano on April 1, 2027.

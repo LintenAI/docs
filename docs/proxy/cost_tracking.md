@@ -1,0 +1,1349 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
+# Spend Tracking
+
+Track spend for keys, users, and teams across 100+ LLMs.
+
+Linten automatically tracks spend for all known models. See how the [model cost map](./model_cost_map) prices each request
+
+Provider-specific cost tracking (e.g., [Vertex AI PayGo / priority pricing](../providers/vertex.md#paygo--priority-cost-tracking), [Bedrock service tiers](../providers/bedrock.md#usage---service-tier), [Azure base model mapping](./custom_pricing.md#set-base_model-for-cost-tracking-eg-azure-deployments)) is applied automatically when the response includes tier metadata.
+
+:::tip[Keep Pricing Data Updated]
+[Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
+:::
+
+:::info[Cost does not match your provider bill?]
+Use the step-by-step workflow in [Debugging a cost discrepancy](../troubleshoot/cost_discrepancy): align time ranges, compare token categories (including cache), then decide whether the gap is ingestion, formula, or model-map pricing.
+:::
+
+### How to Track Spend with Linten
+
+**Step 1**
+
+[Setup Linten with a Database](https://docs.linten.ai/docs/proxy/virtual_keys#setup)
+
+**Step2** Send `/chat/completions` request
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python title="Send Request with Spend Tracking" showLineNumbers
+import openai
+client = openai.OpenAI(
+    api_key="sk-<your-linten-api-key>",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    user="palantir", # OPTIONAL: pass user to track spend by user
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
+        }
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell title="Curl Request with Spend Tracking" showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header "Authorization: Bearer $LINTEN_API_KEY" \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "user": "palantir", # OPTIONAL: pass user to track spend by user
+    "metadata": {
+        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
+    }
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python title="Langchain with Spend Tracking" showLineNumbers
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-<your-api-key>"
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "llama3",
+    user="palantir",
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from linten. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+**Step3 - Verify Spend Tracked**
+That's IT. Now Verify your spend was tracked
+
+<Tabs>
+<TabItem value="curl" label="Response Headers">
+
+Expect to see `x-linten-response-cost` in the response headers with calculated cost
+
+<Image img={require('../../img/response_cost_img.png')} />
+
+</TabItem>
+<TabItem value="db" label="DB + UI">
+
+The following spend gets tracked in Table `Linten_SpendLogs`
+
+```json title="Spend Log Entry Format" showLineNumbers
+{
+  "api_key": "fe6b0cab4ff5a5a8df823196cc8a450*****",                            # Hash of API Key used
+  "user": "default_user",                                                       # Internal User (Linten_UserTable) that owns `api_key=sk-<your-linten-api-key>`.
+  "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32",                            # Team (Linten_TeamTable) that owns `api_key=sk-<your-linten-api-key>`
+  "request_tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"],# Tags sent in request
+  "end_user": "palantir",                                                       # Customer - the `user` sent in the request
+  "model_group": "llama3",                                                      # "model" passed to Linten
+  "api_base": "https://api.groq.com/openai/v1/",                                # "api_base" of model used by Linten
+  "spend": 0.000002,                                                            # Spend in $
+  "total_tokens": 100,
+  "completion_tokens": 80,
+  "prompt_tokens": 20,
+  "metadata": {
+    "attempted_fallbacks": 0,                                                    # 0 = requested model group served the request
+    "original_model_group": "llama3"                                             # Model group originally requested
+  }
+
+}
+```
+
+Navigate to the Usage Tab on the Linten UI (found on https://your-proxy-endpoint/ui) and verify you see spend tracked under `Usage`
+
+<Image img={require('../../img/admin_ui_spend.png')} />
+
+</TabItem>
+</Tabs>
+
+### Requests that price to $0
+
+A request that carries usage but prices to `$0` on a model whose pricing entry has a non-zero rate is still written to `Linten_SpendLogs` with `spend = 0`, and Linten flags it in two places so the gap is visible instead of silently under-billed
+
+- one `WARNING` line in the proxy log naming the model group, the deployment's pricing entry and the pricing key it is missing, for example `pricing entry '<model_id>' has no input_cost_per_token, output_cost_per_token`
+- the Prometheus counter `linten_zero_cost_requests_total`, labelled by `requested_model`, `model`, `model_id`, `api_provider` and `reason` (`missing_pricing_key`, `pricing_not_applied` or `cost_calculation_error`), so you can alert on it (see [Prometheus metrics](prometheus#request-counting-metrics))
+
+Free models (every rate the request used is set to `0`) and requests that carry no usage are not flagged. To fix a `missing_pricing_key`, set the missing rate in the deployment's `model_info` or in the model cost map, or set every rate to `0` to mark the model free
+
+### Allowing Non-Proxy Admins to access `/spend` endpoints
+
+Use this when you want non-proxy admins to access `/spend` endpoints
+
+:::info
+
+Schedule a [meeting with us to get your Enterprise License](https://enterprise.linten.ai/demo)
+
+:::
+
+##### Create Key
+
+Create Key with with `permissions={"get_spend_routes": true}`
+
+```shell title="Generate Key with Spend Route Permissions" showLineNumbers
+curl --location 'http://0.0.0.0:4000/key/generate' \
+        --header "Authorization: Bearer $LINTEN_API_KEY" \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"get_spend_routes": true}
+    }'
+```
+
+##### Use generated key on `/spend` endpoints
+
+Access spend Routes with newly generate keys
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
+  -H 'Authorization: Bearer sk-H16BKvrSNConSsBYLGc_7A'
+```
+
+#### Reset Team, API Key Spend - MASTER KEY ONLY
+
+Use `/global/spend/reset` if you want to:
+
+- Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `Linten_TeamTable` and `Linten_VerificationToken` will be set to `spend=0`
+
+- Linten will maintain all the logs in `LintenSpendLogs` for Auditing Purposes
+
+##### Request
+
+Only the `LINTEN_MASTER_KEY` you set can access this route
+
+```shell
+curl -X POST \
+  'http://localhost:4000/global/spend/reset' \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H 'Content-Type: application/json'
+```
+
+##### Expected Responses
+
+```shell
+{"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
+```
+
+## Total spend per user
+
+Assuming you have been issuing keys for end users, and setting their `user_id` on the key, you can check their usage.
+
+```shell title="Get User Spend - API Request" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/info?user_id=jane_smith' \
+-H 'Authorization: Bearer sk-...'
+```
+
+```json title="Total for a user API Response" showLineNumbers
+{
+  "user_id": "jane_smith",
+  "user_info": {
+    "spend": 0.1
+  },
+  "keys": [
+    {
+      "token": "6e952b0efcafbb6350240db25ed534b4ec6011b3e1ba1006eb4f903461fd36f6",
+      "key_name": "sk-...KE_A",
+      "key_alias": "user-01882d6b-e090-776a-a587-21c63e502670-01983ddb-872f-71a3-8b3a-f9452c705483",
+      "soft_budget_cooldown": false,
+      "spend": 0.1,
+      "expires": "2025-07-31T19:14:13.968000+00:00",
+      "models": [],
+      "aliases": {},
+      "config": {},
+      "user_id": "01982d6b-e090-776a-a587-21c63e502660",
+      "team_id": "f2044fde-2293-482f-bf35-a8dab4e85c5f",
+      "permissions": {},
+      "max_parallel_requests": null,
+      "metadata": {},
+      "blocked": null,
+      "tpm_limit": null,
+      "rpm_limit": null,
+      "max_budget": null,
+      "budget_duration": null,
+      "budget_reset_at": null,
+      "allowed_cache_controls": [],
+      "allowed_routes": [],
+      "model_spend": {},
+      "model_max_budget": {},
+      "budget_id": null,
+      "organization_id": null,
+      "object_permission_id": null,
+      "created_at": "2025-07-24T19:14:13.970000Z",
+      "created_by": "582b168f-fc11-4e14-ad6a-cf4bb3656ddc",
+      "updated_at": "2025-07-24T19:14:13.970000Z",
+      "updated_by": "582b168f-fc11-4e14-ad6a-cf4bb3656ddc",
+      "linten_budget_table": null,
+      "linten_organization_table": null,
+      "object_permission": null,
+      "team_alias": null
+    }
+  ],
+  "teams": []
+}
+```
+
+**Warning**
+End users can provide the `user` parameter in their request bodies, doing this will increment the cost reported via `/customer/info?end_user_id=self-declared-user`, and not for the user that owns the key as reported by that API. This means users could "avoid" having their spend tracked, through their method.
+This means if you need to track user spend, and are giving end users API keys, you must always set user_id when creating their api keys, and use keys issued for that user every time you're making LLM calls on their behalf in backend services. This will track their spend.
+
+## Spend list endpoints (`/spend/keys` and `/spend/users`)
+
+These endpoints list rows from the verification-token and user tables (ordered by spend). They are included in `spend_tracking_routes` for internal users.
+
+### Access control (default)
+
+By default, non-admin callers are **scoped to their own data**:
+
+| Caller role | `/spend/keys` | `/spend/users` |
+|-------------|---------------|----------------|
+| `proxy_admin` / `proxy_admin_viewer` | All keys | All users (or `?user_id=` for one row) |
+| `internal_user` / `internal_user_viewer` | Keys where `user_id` matches the caller | Only the caller's row |
+| Non-admin with no `user_id` on the key | Empty list `[]` | Empty list `[]` |
+
+An internal user who passes `?user_id=` for **another** user receives **HTTP 403** (not a silently filtered list).
+
+```shell title="Admin — all keys" showLineNumbers
+curl -X GET 'http://localhost:4000/spend/keys' \
+  -H 'Authorization: Bearer <proxy-admin-key>'
+```
+
+```shell title="Internal user — own keys only" showLineNumbers
+curl -X GET 'http://localhost:4000/spend/keys' \
+  -H 'Authorization: Bearer <internal-user-key>'
+```
+
+### Scoping cannot be disabled
+
+Caller scoping on `/spend/keys` and `/spend/users` is unconditional. There is no `general_settings` key or environment variable that restores the pre-scoping behavior where any authenticated key could list the full key and user tables. Automation that needs the full tables must use a `proxy_admin` or `proxy_admin_viewer` key.
+
+:::info
+Prefer `/user/info?user_id=...` or `/global/spend/report` for per-user spend analytics. The list endpoints are intended for admin dashboards and scoped self-service views.
+:::
+
+## Daily Spend Breakdown API
+
+Retrieve granular daily usage data for a user (by model, provider, and API key) with a single endpoint.
+
+Example Request:
+
+```shell title="Daily Spend Breakdown API" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+-H "Authorization: Bearer $LINTEN_MASTER_KEY"
+```
+
+```json title="Daily Spend Breakdown API Response" showLineNumbers
+{
+    "results": [
+        {
+            "date": "2025-03-27",
+            "metrics": {
+                "spend": 0.0177072,
+                "prompt_tokens": 111,
+                "completion_tokens": 1711,
+                "total_tokens": 1822,
+                "api_requests": 11
+            },
+            "breakdown": {
+                "models": {
+                    "{{openai_small}}": {
+                        "metrics": {
+                            "spend": 0.0177072,
+                            "prompt_tokens": 111,
+                            "completion_tokens": 1711,
+                            "total_tokens": 1822,
+                            "api_requests": 11
+                        },
+                        "metadata": {},
+                        "api_key_breakdown": {}
+                    }
+                },
+                "providers": {
+                    "openai": {
+                        "metrics": { "spend": 0.0177072 },
+                        "metadata": {},
+                        "api_key_breakdown": {}
+                    }
+                },
+                "api_keys": {
+                    "3126b6eaf1...": {
+                        "metrics": { "spend": 0.0177072 },
+                        "metadata": { "key_alias": "my-key", "key_exists": true }
+                    }
+                }
+            }
+        }
+    ],
+    "metadata": {
+        "total_spend": 0.0177072,
+        "total_prompt_tokens": 111,
+        "total_completion_tokens": 1711,
+        "total_api_requests": 11
+    }
+}
+```
+
+The example shows selected response fields. Each breakdown entry nests its values under `metrics` and its descriptive fields under `metadata`.
+
+### Missing identities and API key filters
+
+Daily reports, drilldowns and exports keep usage with missing model or key values in fallback buckets. Zero-spend requests and negative adjustments remain part of the totals.
+
+| Stored value | Reporting identity |
+| --- | --- |
+| Empty or null model | `unknown-model` |
+| Empty or null model group, with a known model | Model name |
+| Empty or null model group and model | `unknown-model-group` |
+| Empty or null API key | `unattributed` |
+| Literal API key `unattributed` | `raw:unattributed` |
+| API key starting with `raw:` | The key with one additional `raw:` prefix |
+| Other nonempty values, including whitespace | Unchanged |
+
+Literal model names that equal fallback labels share those model buckets. The `unattributed` key bucket has no clickable key details.
+
+Pass the reporting identity to the `api_key` query parameter. For example, to filter the literal stored key `unattributed`, use `raw:unattributed`. For the literal stored key `raw:example`, use `raw:raw:example`. To select missing keys instead, use `unattributed`.
+
+```bash title="Filter an escaped API key identity"
+curl --get 'http://localhost:4000/user/daily/activity/aggregated' \
+  -H "Authorization: Bearer $LINTEN_MASTER_KEY" \
+  --data-urlencode 'start_date=2025-03-20' \
+  --data-urlencode 'end_date=2025-03-27' \
+  --data-urlencode 'api_key=raw:unattributed'
+```
+
+:::warning Export compatibility
+
+Daily activity exports, such as `/user/daily/activity/export?export_type=daily_with_keys&format=json`, replace missing model and key values with the bucket labels above and escape reserved API key IDs. Consumers that expect null values or unescaped reserved key IDs must adapt. Use the exported reporting identity unchanged when filtering daily reports.
+
+:::
+
+### Guardrail spend breakdown
+
+`GET /user/daily/activity/aggregated`, `GET /team/daily/activity/aggregated` and `GET /organization/daily/activity/aggregated` return each day's guardrail costs in `breakdown.guardrails`, keyed by guardrail ID. The breakdown follows the response's date, entity and API key filters.
+
+```bash title="Get daily guardrail spend"
+curl --get 'http://localhost:4000/user/daily/activity/aggregated' \
+  -H "Authorization: Bearer $LINTEN_MASTER_KEY" \
+  --data-urlencode 'start_date=2025-03-20' \
+  --data-urlencode 'end_date=2025-03-27'
+```
+
+Use `/team/daily/activity/aggregated` or `/organization/daily/activity/aggregated` in the same request for those scopes. The following excerpt shows one day's guardrail breakdown.
+
+```json title="Guardrail spend response excerpt"
+{
+  "results": [
+    {
+      "date": "2025-03-27",
+      "metrics": { "spend": 0.05 },
+      "breakdown": {
+        "api_keys": {
+          "3126b6eaf1...": {
+            "metrics": { "spend": 0.05 },
+            "metadata": { "key_alias": "my-key", "key_exists": true }
+          }
+        },
+        "guardrails": {
+          "guardrail-id": {
+            "metrics": { "spend": 0.01, "untracked_units": 2 },
+            "metadata": { "guardrail_name": "content-safety" },
+            "api_key_breakdown": {
+              "3126b6eaf1...": {
+                "metrics": { "spend": 0.01, "untracked_units": 2 },
+                "metadata": { "key_alias": "my-key", "key_exists": true }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Guardrail spend is already included in key and model spend. Do not add it on top of those totals. `untracked_units` counts guardrail units with no known price, so nonzero units mean the reported spend is a lower bound, not the full guardrail cost.
+
+Each guardrail's `api_key_breakdown` includes only keys in that day's `breakdown.api_keys`. The guardrail's total still covers all matching keys, even when the per-key list is truncated. A nonempty `model` filter leaves `guardrails` empty because guardrail costs are not attributed per model. If the guardrail query fails with a database error, the daily response still succeeds with an empty guardrail breakdown.
+
+### API Reference
+
+See our [Swagger API](https://docs.linten.ai/api-reference/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
+
+:::info
+Request counts on this endpoint are derived from spend logs, so they only cover requests that were logged and they record each upstream attempt separately. For counts of what the gateway actually answered, including requests rejected before a key or model was resolved, use [`/gateway/daily/activity`](./endpoint_activity.md#gateway-daily-activity). The two are not expected to match
+:::
+
+## Custom Tags
+
+:::tip[See Full Request Tags Documentation]
+For full documentation on all tag options including `x-linten-tags` header, request body `tags`, and config-based tags, see the dedicated [Request Tags](./request_tags.md) page. To tag requests from the W3C `baggage` header that OpenTelemetry clients already send, see [Map Baggage Values to Tags](./tag_budgets.md#map-baggage-values-to-tags).
+:::
+
+Requirements:
+
+- Virtual Keys & a database should be set up, see [virtual keys](https://docs.linten.ai/docs/proxy/virtual_keys)
+
+**Note:** By default, Linten will track `User-Agent` as a custom tag for cost tracking. This enables viewing usage for tools like Claude Code, Gemini CLI, etc.
+
+<Image img={require('../../img/claude_cli_tag_usage.png')} />
+
+### Client-side spend tag
+
+<Tabs>
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"] # Key Change
+        }
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require("openai");
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: "sk-<your-api-key>",
+    baseURL: "http://0.0.0.0:4000",
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: "{{openai_small}}",
+      messages: [
+        {
+          role: "user",
+          content: "this is a test request, write a short poem",
+        },
+      ],
+      metadata: {
+        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"], // Key Change
+      },
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "{{openai_small}}",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from linten. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Add custom headers to spend tracking
+
+You can add custom headers to the request to track spend and usage.
+
+```yaml
+linten_settings:
+  extra_spend_tag_headers:
+    - "x-custom-header"
+```
+
+### Disable user-agent tracking
+
+You can disable user-agent tracking by setting `linten_settings.disable_add_user_agent_to_request_tags` to `true`.
+
+```yaml
+linten_settings:
+  disable_add_user_agent_to_request_tags: true
+```
+
+## (Enterprise) Generate Spend Reports {#-enterprise-generate-spend-reports}
+
+Use this to charge other teams, customers, users
+
+Use the `/global/spend/report` endpoint to get spend reports
+
+<Tabs>
+
+<TabItem value="per team" label="Spend Per Team">
+
+#### Example Request
+
+Key Change: Specify `group_by=team`
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=team' \
+  -H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+#### Example Response
+
+<Tabs>
+
+<TabItem value="response" label="Expected Response">
+
+```shell
+[
+    {
+        "group_by_day": "2024-04-30T00:00:00+00:00",
+        "teams": [
+            {
+                "team_name": "Prod Team",
+                "total_spend": 0.0015265,
+                "metadata": [ # see the spend by unique(key + model)
+                    {
+                        "model": "{{openai_large}}",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "88dc28.." # the hashed api key
+                    },
+                    {
+                        "model": "{{openai_large}}",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "a73dc2.." # the hashed api key
+                    },
+                    {
+                        "model": "chatgpt-v-2",
+                        "spend": 0.000214,
+                        "total_tokens": 122,
+                        "api_key": "898c28.." # the hashed api key
+                    },
+                    {
+                        "model": "{{openai_small}}",
+                        "spend": 0.0000825,
+                        "total_tokens": 85,
+                        "api_key": "84dc28.." # the hashed api key
+                    }
+                ]
+            }
+        ]
+    }
+]
+```
+
+</TabItem>
+
+<TabItem value="py-script" label="Script to Parse Response (Python)">
+
+```python
+import requests
+url = 'http://localhost:4000/global/spend/report'
+params = {
+    'start_date': '2023-04-01',
+    'end_date': '2024-06-30'
+}
+
+headers = {
+    'Authorization': 'Bearer sk-<your-linten-api-key>'
+}
+
+# Make the GET request
+response = requests.get(url, headers=headers, params=params)
+spend_report = response.json()
+
+for row in spend_report:
+  date = row["group_by_day"]
+  teams = row["teams"]
+  for team in teams:
+      team_name = team["team_name"]
+      total_spend = team["total_spend"]
+      metadata = team["metadata"]
+
+      print(f"Date: {date}")
+      print(f"Team: {team_name}")
+      print(f"Total Spend: {total_spend}")
+      print("Metadata: ", metadata)
+      print()
+```
+
+Output from script
+
+```shell
+# Date: 2024-05-11T00:00:00+00:00
+# Team: local_test_team
+# Total Spend: 0.003675099999999999
+# Metadata:  [{'model': '{{openai_small}}', 'spend': 0.003675099999999999, 'api_key': 'b94d5e0bc3a71a573917fe1335dc0c14728c7016337451af9714924ff3a729db', 'total_tokens': 3105}]
+
+# Date: 2024-05-13T00:00:00+00:00
+# Team: Unassigned Team
+# Total Spend: 3.4e-05
+# Metadata:  [{'model': '{{openai_small}}', 'spend': 3.4e-05, 'api_key': '9569d13c9777dba68096dea49b0b03e0aaf4d2b65d4030eda9e8a2733c3cd6e0', 'total_tokens': 50}]
+
+# Date: 2024-05-13T00:00:00+00:00
+# Team: central
+# Total Spend: 0.000684
+# Metadata:  [{'model': '{{openai_small}}', 'spend': 0.000684, 'api_key': '0323facdf3af551594017b9ef162434a9b9a8ca1bbd9ccbd9d6ce173b1015605', 'total_tokens': 498}]
+
+# Date: 2024-05-13T00:00:00+00:00
+# Team: local_test_team
+# Total Spend: 0.0005715000000000001
+# Metadata:  [{'model': '{{openai_small}}', 'spend': 0.0005715000000000001, 'api_key': 'b94d5e0bc3a71a573917fe1335dc0c14728c7016337451af9714924ff3a729db', 'total_tokens': 423}]
+```
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+<TabItem value="per customer" label="Spend Per Customer">
+
+:::info
+
+Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-linten)
+
+- [Linten API key](virtual_keys.md)
+
+:::
+
+#### Example Request
+
+Key Change: Specify `group_by=customer`
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=customer' \
+  -H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+#### Example Response
+
+```shell
+[
+    {
+        "group_by_day": "2024-04-30T00:00:00+00:00",
+        "customers": [
+            {
+                "customer": "palantir",
+                "total_spend": 0.0015265,
+                "metadata": [ # see the spend by unique(key + model)
+                    {
+                        "model": "{{openai_large}}",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "88dc28.." # the hashed api key
+                    },
+                    {
+                        "model": "{{openai_large}}",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "a73dc2.." # the hashed api key
+                    },
+                    {
+                        "model": "chatgpt-v-2",
+                        "spend": 0.000214,
+                        "total_tokens": 122,
+                        "api_key": "898c28.." # the hashed api key
+                    },
+                    {
+                        "model": "{{openai_small}}",
+                        "spend": 0.0000825,
+                        "total_tokens": 85,
+                        "api_key": "84dc28.." # the hashed api key
+                    }
+                ]
+            }
+        ]
+    }
+]
+```
+
+</TabItem>
+
+<TabItem value="per key" label="Spend for Specific API Key">
+
+Key Change: Specify `api_key=sk-<your-linten-api-key>`
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&api_key=sk-<your-linten-api-key>' \
+  -H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+#### Example Response
+
+```shell
+[
+  {
+    "api_key": "example-api-key-123",
+    "total_cost": 0.3201286305151999,
+    "total_input_tokens": 36.0,
+    "total_output_tokens": 1593.0,
+    "model_details": [
+      {
+        "model": "dall-e-3",
+        "total_cost": 0.31999939051519993,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0
+      },
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 0.00012924,
+        "total_input_tokens": 36,
+        "total_output_tokens": 1593
+      }
+    ]
+  }
+]
+```
+
+</TabItem>
+
+<TabItem value="per user" label="Spend for Internal User (Key Owner)">
+
+:::info
+
+Internal User (Key Owner): This is the value of `user_id` passed when calling [`/key/generate`](https://docs.linten.ai/api-reference/#/key%20management/generate_key_fn_key_generate_post)
+
+:::
+
+Key Change: Specify `internal_user_id=ishaan`
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-12-30&internal_user_id=ishaan' \
+  -H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+#### Example Response
+
+```shell
+[
+  {
+    "api_key": "example-api-key-123",
+    "total_cost": 0.00013132,
+    "total_input_tokens": 105.0,
+    "total_output_tokens": 872.0,
+    "model_details": [
+      {
+        "model": "gpt-3.5-turbo-instruct",
+        "total_cost": 5.85e-05,
+        "total_input_tokens": 15,
+        "total_output_tokens": 18
+      },
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 7.282000000000001e-05,
+        "total_input_tokens": 90,
+        "total_output_tokens": 854
+      }
+    ]
+  },
+  {
+    "api_key": "151e85e46ab8c9c7fad090793e3fe87940213f6ae665b543ca633b0b85ba6dc6",
+    "total_cost": 5.2699999999999993e-05,
+    "total_input_tokens": 26.0,
+    "total_output_tokens": 27.0,
+    "model_details": [
+      {
+        "model": "{{openai_small}}",
+        "total_cost": 5.2499999999999995e-05,
+        "total_input_tokens": 24,
+        "total_output_tokens": 27
+      },
+      {
+        "model": "text-embedding-ada-002",
+        "total_cost": 2e-07,
+        "total_input_tokens": 2,
+        "total_output_tokens": 0
+      }
+    ]
+  },
+  {
+    "api_key": "60cb83a2dcbf13531bd27a25f83546ecdb25a1a6deebe62d007999dc00e1e32a",
+    "total_cost": 9.42e-06,
+    "total_input_tokens": 30.0,
+    "total_output_tokens": 99.0,
+    "model_details": [
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 9.42e-06,
+        "total_input_tokens": 30,
+        "total_output_tokens": 99
+      }
+    ]
+  }
+]
+```
+
+</TabItem>
+
+</Tabs>
+
+## Spend Logs API - Individual Transaction Logs {#-spend-logs-api---individual-transaction-logs}
+
+The `/spend/logs` endpoint now supports a `summarize` parameter to control data format when using date filters.
+
+### Key Parameters
+
+| Parameter   | Description                                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------- |
+| `summarize` | **New parameter**: `true` (default) = aggregated data, `false` = individual transaction logs |
+
+### Examples
+
+**Get individual transaction logs:**
+
+```bash title="Get Individual Transaction Logs" showLineNumbers
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
+-H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+**Get summarized data (default):**
+
+```bash title="Get Summarized Spend Data" showLineNumbers
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02" \
+-H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+**Use Cases:**
+
+- `summarize=false`: Analytics dashboards, ETL processes, detailed audit trails
+- `summarize=true`: Daily spending reports, high-level cost tracking (legacy behavior)
+
+## Paginated Spend Logs - `/spend/logs/v2`
+
+Use `/spend/logs/v2` for programmatic access to individual spend logs with page-based pagination. The legacy `/spend/logs` endpoint above truncates results to the 10,000 most recent matching rows (the response then carries an `x-linten-spend-logs-truncated: true` header), so `/spend/logs/v2` is the recommended endpoint for exports and integrations.
+
+```bash title="Get a page of spend logs" showLineNumbers
+curl -X GET "http://localhost:4000/spend/logs/v2?start_date=2024-01-01%2000:00:00&end_date=2024-01-02%2023:59:59&page=1&page_size=100" \
+-H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+`start_date` and `end_date` take `YYYY-MM-DD HH:MM:SS` timestamps. `page` starts at 1 and `page_size` accepts up to 1000 rows per page. The endpoint also accepts filters such as `api_key`, `user_id`, `team_id`, `model`, `status_filter`, `min_spend` and `max_spend`; the full list is on your proxy's Swagger page (`/docs`) under `/spend/logs/v2`.
+
+```json title="Response format"
+{
+  "data": ["..."],
+  "total": 10000,
+  "page": 1,
+  "page_size": 100,
+  "total_pages": 100,
+  "total_is_capped": true
+}
+```
+
+### The `total` count is capped at 10,000
+
+Counting every matching row in a large time window caused expensive full scans on the spend logs table, so since v1.93.0 the count query behind this endpoint is bounded at 10,000 rows. When more rows match, `total` reports exactly `10000`, `total_pages` is derived from that capped value, and `total_is_capped` is `true`. Only the advertised count is capped. The data itself is never truncated, so pages past the advertised `total_pages` keep returning rows until the results are exhausted.
+
+There are two ways to read every matching row. When `total_is_capped` is `true`, ignore `total_pages` and keep requesting pages until you receive an empty `data` array. Alternatively, chunk your query into smaller time windows so each window matches fewer than 10,000 rows; every window then reports an exact `total`. Prefer the windowing approach for large exports, since it also avoids deep offset pagination, which gets slower the further in you page.
+
+With `group_by_session=true`, pagination is bounded to the same 10,000-row window and a page starting past it returns no rows, so chunk the time window instead of paging past the cap.
+
+## Custom Spend Log metadata
+
+Log specific key,value pairs as part of the metadata for a spend log
+
+Requirements: 
+
+- Virtual Keys & a database should be set up, see [virtual keys](https://docs.linten.ai/docs/proxy/virtual_keys)
+
+#### Usage - /chat/completions requests with special spend logs metadata 
+
+
+<Tabs>
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "spend_logs_metadata": {
+                "hello": "world"
+            }
+        }
+    }
+)
+
+print(response)
+```
+
+**Using Headers:**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-<your-linten-api-key>",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Pass spend logs metadata via headers
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_headers={
+        "x-linten-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-<your-api-key>',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: '{{openai_small}}',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        spend_logs_metadata: { // Key Change
+            hello: "world"
+        }
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+**Using Headers:**
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-<your-api-key>',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: '{{openai_small}}',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ]
+    }, {
+      headers: {
+        'x-linten-spend-logs-metadata': '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "spend_logs_metadata": {
+            "hello": "world"
+        }
+    }
+}'
+```
+
+</TabItem>
+
+<TabItem value="headers" label="Using Headers">
+
+Pass `x-linten-spend-logs-metadata` as a request header with JSON string
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header "Authorization: Bearer $LINTEN_API_KEY" \
+    --header 'x-linten-spend-logs-metadata: {"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}' \
+    --data '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "{{openai_small}}",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "spend_logs_metadata": {
+                "hello": "world"
+            }
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from linten. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+#### Viewing Spend w/ custom metadata
+
+#### `/spend/logs` Request Format 
+
+```bash
+# request_id: e.g.: chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm
+curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \
+-H "Authorization: Bearer $LINTEN_API_KEY"
+```
+
+#### `/spend/logs` Response Format
+```bash
+[
+    {
+        "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
+        "call_type": "acompletion",
+        "metadata": {
+            "user_api_key": "example-api-key-123",
+            "user_api_key_alias": null,
+            "spend_logs_metadata": { # LOGGED CUSTOM METADATA
+                "hello": "world"
+            },
+            "user_api_key_team_id": null,
+            "user_api_key_user_id": "116544810872468347480",
+            "user_api_key_team_alias": null
+        },
+    }
+]
+```

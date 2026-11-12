@@ -1,0 +1,55 @@
+# Helicone Tutorial 
+[Helicone](https://helicone.ai/) is an open source observability platform that proxies your OpenAI traffic and provides you key insights into your spend, latency and usage.
+
+## Use Helicone to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
+linten provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses. 
+
+In this case, we want to log requests to Helicone when a request succeeds. 
+
+### Approach 1: Use Callbacks 
+Use just 1 line of code, to instantly log your responses **across all providers** with helicone: 
+```
+linten.success_callback=["helicone"]
+```
+
+Complete code
+```python
+from linten import completion
+
+## set env variables
+os.environ["HELICONE_API_KEY"] = "your-helicone-key" 
+os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
+
+# set callbacks
+linten.success_callback=["helicone"]
+
+#openai call
+response = completion(model="{{openai_small}}", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+
+#cohere call
+response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}]) 
+```
+
+### Approach 2: [OpenAI + Azure only] Use Helicone as a proxy
+Helicone provides advanced functionality like caching, etc. Helicone currently supports this for Azure and OpenAI.
+
+If you want to use Helicone to proxy your OpenAI/Azure requests, then you can - 
+
+- Set helicone as your base url via: `linten.api_url` 
+- Pass in helicone request headers via: `linten.headers` 
+
+Complete Code
+```
+import linten
+from linten import completion
+
+linten.api_base = "https://oai.hconeai.com/v1"
+linten.headers = {"Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}"}
+
+response = linten.completion(
+    model="{{openai_small}}",
+    messages=[{"role": "user", "content": "how does a court case get to the Supreme Court?"}]
+)
+
+print(response)
+```

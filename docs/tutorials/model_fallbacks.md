@@ -1,0 +1,85 @@
+---
+description: "Implement model fallbacks (provider failover) across OpenAI, Anthropic, and Azure with Linten so a failing provider fails over to a backup."
+keywords: [fallbacks, failover, provider failover, model failover, OpenAI, Anthropic, Azure, reliability]
+---
+
+# Model Fallbacks (Provider Failover) w/ Linten
+
+Here's how you can implement model fallbacks (provider failover) across 3 LLM providers (OpenAI, Anthropic, Azure) using Linten. 
+
+## 1. Install Linten
+```bash
+uv add linten
+```
+
+## 2. Basic Fallbacks Code 
+```python 
+import os
+import traceback
+import linten
+from linten import embedding, completion
+
+# set ENV variables
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+model_fallback_list = ["{{anthropic}}", "{{openai_small}}", "chatgpt-test"]
+
+user_message = "Hello, how are you?"
+messages = [{ "content": user_message,"role": "user"}]
+
+for model in model_fallback_list:
+  try:
+      response = completion(model=model, messages=messages)
+  except Exception as e:
+      print(f"error occurred: {traceback.format_exc()}")
+```
+
+## 3. Context Window Exceptions 
+Linten provides a sub-class of the InvalidRequestError class for Context Window Exceeded errors ([docs](https://docs.linten.ai/docs/exception_mapping)).
+
+Implement model fallbacks based on context window exceptions. 
+
+Use `linten.get_model_info(model)["max_input_tokens"]` to identify the context window limit that's been exceeded. `get_max_tokens()` returns the model's max output tokens, not its context window, so don't compare it against context window sizes. 
+
+The model ids in the fallback list below are illustrative and kept for their context window sizes.
+
+```python keep-model-ids
+import os
+import linten
+from linten import completion, ContextWindowExceededError
+
+# set ENV variables
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["COHERE_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+context_window_fallback_list = [{"model":"gpt-5.4-mini", "max_input_tokens": 272000}, {"model":"gpt-6.1-sol", "max_input_tokens": 922000}, {"model": "claude-opus-5", "max_input_tokens": 1000000}]
+
+user_message = "Hello, how are you?"
+messages = [{ "content": user_message,"role": "user"}]
+
+initial_model = "command-nightly"
+
+def completion_with_context_window_fallbacks(messages):
+    try:
+        return completion(model=initial_model, messages=messages)
+    except ContextWindowExceededError:
+        exceeded_limit = linten.get_model_info(initial_model)["max_input_tokens"]
+        for fallback in context_window_fallback_list:
+            if exceeded_limit < fallback["max_input_tokens"]:
+                try:
+                    return completion(model=fallback["model"], messages=messages)
+                except ContextWindowExceededError:
+                    exceeded_limit = fallback["max_input_tokens"]
+        raise
+
+response = completion_with_context_window_fallbacks(messages)
+print(response)
+```

@@ -1,0 +1,508 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Mistral AI API
+https://docs.mistral.ai/api/
+
+## API Key
+```python
+# env variable
+os.environ['MISTRAL_API_KEY']
+```
+
+## Sample Usage
+```python
+from linten import completion
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = completion(
+    model="mistral/mistral-tiny", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+)
+print(response)
+```
+
+## Sample Usage - Streaming
+```python
+from linten import completion
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = completion(
+    model="mistral/mistral-tiny", 
+    messages=[
+       {"role": "user", "content": "hello from linten"}
+   ],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
+```
+
+
+
+## Usage with Linten Proxy 
+
+### 1. Set Mistral Models on config.yaml
+
+```yaml
+model_list:
+  - model_name: mistral-small-latest
+    linten_params:
+      model: mistral/mistral-small-latest
+      api_key: "os.environ/MISTRAL_API_KEY" # ensure you have `MISTRAL_API_KEY` in your .env
+```
+
+### 2. Start Proxy 
+
+```
+linten --config config.yaml
+```
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "mistral-small-latest",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(model="mistral-small-latest", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the Linten Proxy
+    model = "mistral-small-latest",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from linten. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+## Supported Models
+
+:::info
+All models listed here https://docs.mistral.ai/platform/endpoints are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/LintenAI/linten/blob/main/model_prices_and_context_window.json).
+
+:::
+
+
+| Model Name     | Function Call                                                | Reasoning Support |
+|----------------|--------------------------------------------------------------|-------------------|
+| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` | No |
+| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`| No |
+| Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` | No |
+| Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` | No |
+| **Magistral Small**  | `completion(model="mistral/magistral-small-2506", messages)` | Yes |
+| **Magistral Medium** | `completion(model="mistral/magistral-medium-2506", messages)`| Yes |
+| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      | No |
+| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    | No |
+| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   | No |
+| Codestral      | `completion(model="mistral/codestral-latest", messages)`     | No |
+| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     | No |
+| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     | No |
+| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     | No |
+| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     | No |
+
+## Function Calling 
+
+```python
+from linten import completion
+
+# set env
+os.environ["MISTRAL_API_KEY"] = "your-api-key"
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="mistral/mistral-large-latest",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+```
+
+## Reasoning
+
+Mistral does not directly support reasoning, instead it recommends a specific [system prompt](https://docs.mistral.ai/capabilities/reasoning/) to use with their magistral models. By setting the `reasoning_effort` parameter, Linten will prepend the system prompt to the request. 
+
+If an existing system message is provided, Linten will send both as a list of system messages (you can verify this by enabling `linten._turn_on_debug()`).
+
+### Supported Models
+
+| Model Name     | Function Call                                                |
+|----------------|--------------------------------------------------------------|
+| Magistral Small  | `completion(model="mistral/magistral-small-2506", messages)` |
+| Magistral Medium | `completion(model="mistral/magistral-medium-2506", messages)`|
+
+### Using Reasoning Effort
+
+The `reasoning_effort` parameter controls how much effort the model puts into reasoning. When used with magistral models.
+
+```python
+from linten import completion
+import os
+
+os.environ['MISTRAL_API_KEY'] = "your-api-key"
+
+response = completion(
+    model="mistral/magistral-medium-2506",
+    messages=[
+        {"role": "user", "content": "What is 15 multiplied by 7?"}
+    ],
+    reasoning_effort="medium"  # Options: "low", "medium", "high"
+)
+
+print(response)
+```
+
+### Example with System Message
+
+If you already have a system message, Linten will prepend the reasoning instructions:
+
+```python
+response = completion(
+    model="mistral/magistral-medium-2506",
+    messages=[
+        {"role": "system", "content": "You are a helpful math tutor."},
+        {"role": "user", "content": "Explain how to solve quadratic equations."}
+    ],
+    reasoning_effort="high"
+)
+
+# The system message becomes:
+# "When solving problems, think step-by-step in <think> tags before providing your final answer...
+#  
+#  You are a helpful math tutor."
+```
+
+### Usage with Linten Proxy
+
+You can also use reasoning capabilities through the Linten proxy:
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+      "model": "magistral-medium-2506",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the square root of 144? Show your reasoning."
+        }
+      ],
+      "reasoning_effort": "medium"
+    }'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="magistral-medium-2506", 
+    messages=[
+        {
+            "role": "user",
+            "content": "Calculate the area of a circle with radius 5. Show your work."
+        }
+    ],
+    reasoning_effort="high"
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+- **Model Compatibility**: Reasoning parameters only work with magistral models
+- **Backward Compatibility**: Non-magistral models will ignore reasoning parameters and work normally
+
+## Audio Transcription
+
+Use Mistral's Voxtral models for audio transcription via `linten.transcription()`.
+
+### SDK Usage
+
+```python
+from linten import transcription
+import os
+
+os.environ["MISTRAL_API_KEY"] = ""
+
+audio_file = open("path/to/audio.wav", "rb")
+
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+)
+
+print(response.text)
+```
+
+### With Optional Parameters
+
+```python
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+    language="en",
+    temperature=0.0,
+    response_format="json",
+)
+```
+
+### Mistral-Specific Parameters
+
+Mistral supports additional parameters beyond the OpenAI-compatible ones:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `diarize` | `bool` | Enable speaker diarization |
+
+```python
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+    diarize=True,
+)
+```
+
+### Usage with Linten Proxy
+
+```yaml
+model_list:
+  - model_name: voxtral
+    linten_params:
+      model: mistral/voxtral-mini-latest
+      api_key: os.environ/MISTRAL_API_KEY
+    model_info:
+      mode: audio_transcription
+```
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
+--header "Authorization: Bearer $LINTEN_API_KEY" \
+--form 'file=@"audio.wav"' \
+--form 'model="voxtral"'
+```
+
+## Text to Speech
+
+Mistral's Voxtral TTS models turn text into audio through `linten.speech()` and the proxy's `/v1/audio/speech` route. Both `mistral/voxtral-mini-tts-2603` and `mistral/voxtral-mini-tts-latest` are supported <SinceVersion v="1.102.0" />.
+
+### SDK Usage
+
+```python
+from linten import speech
+import os
+
+os.environ["MISTRAL_API_KEY"] = ""
+
+response = speech(
+    model="mistral/voxtral-mini-tts-2603",
+    input="The quick brown fox jumped over the lazy dog.",
+    voice="alloy",
+)
+
+response.write_to_file("speech.mp3")
+```
+
+### Voices
+
+`voice` takes either an OpenAI voice name or a native Mistral voice id. Linten maps these six OpenAI names onto Mistral voices, so an integration that uses one of them keeps working without a change:
+
+| OpenAI voice | Mistral voice     |
+|--------------|-------------------|
+| `alloy`      | `en_paul_neutral` |
+| `echo`       | `gb_oliver_neutral` |
+| `fable`      | `en_paul_cheerful` |
+| `onyx`       | `en_paul_confident` |
+| `nova`       | `gb_jane_sarcasm` |
+| `shimmer`    | `gb_jane_sarcasm` |
+
+Any other value passes through to Mistral untouched, so a native id such as `en_paul_excited` works as-is. Newer OpenAI voices such as `coral` or `ash` are not mapped, and Mistral answers them, like any voice it does not know, with a 404 `invalid_voice` error. `nova` and `shimmer` both map to a sarcastic voice, so pass `gb_jane_neutral` directly when you want a neutral female voice. `GET https://api.mistral.ai/v1/audio/voices?limit=100` lists the voices your account can use. The endpoint is paginated and returns 10 voices when you leave `limit` out.
+
+### Response Formats
+
+`response_format` accepts `mp3`, `wav`, `pcm`, `flac`, and `opus`, and defaults to `mp3` when you leave it out. Linten sets the response `content-type` to match the format you asked for, so `opus` comes back as `audio/ogg` and the other four as `audio/mpeg`, `audio/wav`, `audio/pcm`, and `audio/flac`. OpenAI's `aac` format is not supported, and Mistral rejects it with a 422. Mistral's `pcm` is raw 32-bit float little-endian samples at 24 kHz mono, not the 16-bit signed samples OpenAI's `pcm` returns, so read it as float32 or ask for `wav` instead.
+
+### Voice Cloning
+
+Pass a base64 encoded audio sample as `ref_audio`, and Voxtral speaks the input in the sampled voice:
+
+```python
+import base64
+from linten import speech
+
+with open("sample.wav", "rb") as sample:
+    ref_audio = base64.b64encode(sample.read()).decode()
+
+response = speech(
+    model="mistral/voxtral-mini-tts-2603",
+    input="This sentence comes back in the sampled voice.",
+    ref_audio=ref_audio,
+)
+
+response.write_to_file("cloned.mp3")
+```
+
+On the proxy, send the same `ref_audio` field in the JSON body of `/v1/audio/speech`. When a request also carries a `voice`, including a default `voice` set on the deployment, Mistral uses `ref_audio`, so a client that requires `voice`, such as the OpenAI SDK, can pass any voice and send `ref_audio` through `extra_body`.
+
+### Unsupported Parameters
+
+Mistral's speech API rejects `speed` and `instructions` with a 422, so Linten drops both before sending the request instead of failing it. A call that passes either one still returns audio, generated from the parameters Mistral does accept.
+
+### Usage with Linten Proxy
+
+```yaml
+model_list:
+  - model_name: voxtral-tts
+    linten_params:
+      model: mistral/voxtral-mini-tts-2603
+      api_key: os.environ/MISTRAL_API_KEY
+```
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/audio/speech' \
+--header "Authorization: Bearer $LINTEN_API_KEY" \
+--header 'Content-Type: application/json' \
+--data '{
+    "model": "voxtral-tts",
+    "input": "The quick brown fox jumped over the lazy dog.",
+    "voice": "alloy"
+}' \
+--output speech.mp3
+```
+
+### Cost Tracking
+
+Voxtral TTS is priced per input character, at the `input_cost_per_character` rate in the [model cost map](https://github.com/LintenAI/linten/blob/main/model_prices_and_context_window.json). Linten counts the non-whitespace characters of `input`, so a 19 character sentence holding 2 spaces is tracked as 17 characters. Mistral's own character meter, reported in the `x-ratelimit-input-characters-query-cost` response header, counts the spaces too, so whenever `input` contains whitespace, the spend Linten tracks is lower than what Mistral meters.
+
+## Files and Batches API
+
+Linten routes the OpenAI-compatible `/v1/files` and `/v1/batches` endpoints to Mistral's Files and Batch APIs. See [Mistral AI Batch API](./mistral_batches) for the full flow and cost tracking.
+
+## Sample Usage - Embedding
+```python
+from linten import embedding
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = embedding(
+    model="mistral/mistral-embed",
+    input=["good morning from linten"],
+)
+print(response)
+```
+
+
+## Supported Models
+All models listed here https://docs.mistral.ai/platform/endpoints are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Mistral Embeddings | `embedding(model="mistral/mistral-embed", input)` | 
+
+

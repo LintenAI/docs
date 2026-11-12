@@ -1,0 +1,732 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# MiniMax  
+
+## MiniMax - v1/messages
+
+### Overview
+
+Linten provides anthropic specs compatible support for minmax
+
+### Supported Models
+
+MiniMax offers three models through their Anthropic-compatible API:
+
+| Model | Description | Input Cost | Output Cost | Prompt Caching Read | Prompt Caching Write |
+|-------|-------------|------------|-------------|---------------------|----------------------|
+| **MiniMax-M2.1** | Powerful Multi-Language Programming with Enhanced Programming Experience (~60 tps) | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M2.1-lightning** | Faster and More Agile (~100 tps) | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M2** | Agentic capabilities, Advanced reasoning | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
+
+
+### Usage Examples
+
+#### Basic Chat Completion
+
+```python
+import linten
+
+response = linten.anthropic.messages.acreate(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    api_key="your-minimax-api-key",
+    api_base="https://api.minimax.io/anthropic/v1/messages",
+    max_tokens=1000
+)
+
+print(response.choices[0].message.content)
+```
+
+#### Using Environment Variables
+
+```bash
+export MINIMAX_API_KEY="your-minimax-api-key"
+export MINIMAX_API_BASE="https://api.minimax.io/anthropic/v1/messages"
+```
+
+```python
+import linten
+
+response = linten.anthropic.messages.acreate(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=1000
+)
+```
+
+#### With Thinking (M2.1 Feature)
+
+```python
+response = linten.anthropic.messages.acreate(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Solve: 2+2=?"}],
+    thinking={"type": "enabled", "budget_tokens": 1000},
+    api_key="your-minimax-api-key"
+)
+
+# Access thinking content
+for block in response.choices[0].message.content:
+    if hasattr(block, 'type') and block.type == 'thinking':
+        print(f"Thinking: {block.thinking}")
+```
+
+#### With Tool Calling
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+response = linten.anthropic.messages.acreate(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "What's the weather in SF?"}],
+    tools=tools,
+    api_key="your-minimax-api-key",
+    max_tokens=1000
+)
+```
+
+
+
+### Usage with Linten Proxy 
+
+You can use MiniMax models with the Anthropic SDK by routing through Linten Proxy:
+
+| Step | Description |
+|------|-------------|
+| **1. Start Linten Proxy** | Configure proxy with MiniMax models in `config.yaml` |
+| **2. Set Environment Variables** | Point Anthropic SDK to proxy endpoint |
+| **3. Use Anthropic SDK** | Call MiniMax models using native Anthropic SDK |
+
+#### Step 1: Configure Linten Proxy
+
+Create a `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: minimax/MiniMax-M2.1
+    linten_params:
+      model: minimax/MiniMax-M2.1
+      api_key: os.environ/MINIMAX_API_KEY
+      api_base: https://api.minimax.io/anthropic/v1/messages
+```
+
+Start the proxy:
+
+```bash
+linten --config config.yaml
+```
+
+#### Step 2: Use with Anthropic SDK
+
+```python
+import os
+os.environ["ANTHROPIC_BASE_URL"] = "http://localhost:4000"
+os.environ["ANTHROPIC_API_KEY"] = "sk-<your-api-key>"  # Your Linten proxy key
+
+import anthropic
+
+client = anthropic.Anthropic()
+
+message = client.messages.create(
+    model="minimax/MiniMax-M2.1",
+    max_tokens=1000,
+    system="You are a helpful assistant.",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hi, how are you?"
+                }
+            ]
+        }
+    ]
+)
+
+for block in message.content:
+    if block.type == "thinking":
+        print(f"Thinking:\n{block.thinking}\n")
+    elif block.type == "text":
+        print(f"Text:\n{block.text}\n")
+```
+
+## MiniMax - v1/chat/completions
+
+### Usage with Linten SDK
+
+You can use MiniMax's OpenAI-compatible API directly with Linten:
+
+#### Basic Chat Completion
+
+```python
+import linten
+
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello, how are you?"}
+    ],
+    api_key="your-minimax-api-key",
+    api_base="https://api.minimax.io/v1"
+)
+
+print(response.choices[0].message.content)
+```
+
+#### Using Environment Variables
+
+```bash
+export MINIMAX_API_KEY="your-minimax-api-key"
+export MINIMAX_API_BASE="https://api.minimax.io/v1"
+```
+
+```python
+import linten
+
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+#### With Reasoning Split
+
+```python
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Solve: 2+2=?"}
+    ],
+    extra_body={"reasoning_split": True},
+    api_key="your-minimax-api-key",
+    api_base="https://api.minimax.io/v1"
+)
+
+# Access reasoning details if available
+if hasattr(response.choices[0].message, 'reasoning_details'):
+    print(f"Thinking: {response.choices[0].message.reasoning_details}")
+print(f"Response: {response.choices[0].message.content}")
+```
+
+#### With Tool Calling
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "What's the weather in SF?"}],
+    tools=tools,
+    api_key="your-minimax-api-key",
+    api_base="https://api.minimax.io/v1"
+)
+```
+
+#### Streaming
+
+```python
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Tell me a story"}],
+    stream=True,
+    api_key="your-minimax-api-key",
+    api_base="https://api.minimax.io/v1"
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+
+### Usage with OpenAI SDK via Linten Proxy
+
+You can also use MiniMax models with the OpenAI SDK by routing through Linten Proxy:
+
+| Step | Description |
+|------|-------------|
+| **1. Start Linten Proxy** | Configure proxy with MiniMax models in `config.yaml` |
+| **2. Set Environment Variables** | Point OpenAI SDK to proxy endpoint |
+| **3. Use OpenAI SDK** | Call MiniMax models using native OpenAI SDK |
+
+#### Step 1: Configure Linten Proxy
+
+Create a `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: minimax/MiniMax-M2.1
+    linten_params:
+      model: minimax/MiniMax-M2.1
+      api_key: os.environ/MINIMAX_API_KEY
+      api_base: https://api.minimax.io/v1
+```
+
+Start the proxy:
+
+```bash
+linten --config config.yaml
+```
+
+#### Step 2: Use with OpenAI SDK
+
+```python
+import os
+os.environ["OPENAI_BASE_URL"] = "http://localhost:4000"
+os.environ["OPENAI_API_KEY"] = "sk-<your-api-key>"  # Your Linten proxy key
+
+from openai import OpenAI
+
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="minimax/MiniMax-M2.1",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hi, how are you?"},
+    ],
+    # Set reasoning_split=True to separate thinking content
+    extra_body={"reasoning_split": True},
+)
+
+# Access thinking and response
+if hasattr(response.choices[0].message, 'reasoning_details'):
+    print(f"Thinking:\n{response.choices[0].message.reasoning_details[0]['text']}\n")
+print(f"Text:\n{response.choices[0].message.content}\n")
+```
+
+#### Streaming with OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+stream = client.chat.completions.create(
+    model="minimax/MiniMax-M2.1",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Tell me a story"},
+    ],
+    extra_body={"reasoning_split": True},
+    stream=True,
+)
+
+reasoning_buffer = ""
+text_buffer = ""
+
+for chunk in stream:
+    if hasattr(chunk.choices[0].delta, "reasoning_details") and chunk.choices[0].delta.reasoning_details:
+        for detail in chunk.choices[0].delta.reasoning_details:
+            if "text" in detail:
+                reasoning_text = detail["text"]
+                new_reasoning = reasoning_text[len(reasoning_buffer):]
+                if new_reasoning:
+                    print(new_reasoning, end="", flush=True)
+                    reasoning_buffer = reasoning_text
+
+    if chunk.choices[0].delta.content:
+        content_text = chunk.choices[0].delta.content
+        new_text = content_text[len(text_buffer):] if text_buffer else content_text
+        if new_text:
+            print(new_text, end="", flush=True)
+            text_buffer = content_text
+```
+
+### Cost Calculation
+
+Cost calculation works automatically using the pricing information in `model_prices_and_context_window.json`.
+
+Example:
+```python
+response = linten.completion(
+    model="minimax/MiniMax-M2.1",
+    messages=[{"role": "user", "content": "Hello!"}],
+    api_key="your-minimax-api-key"
+)
+
+# Access cost information
+print(f"Cost: ${response._hidden_params.get('response_cost', 0)}")
+```
+
+## Latest model aliases
+
+<SinceVersion v="1.109.0" />
+
+`minimax/<family>-latest` names follow a model family as Linten moves them to newer models, so your application keeps one model string. Use them like any other MiniMax model name. Linten sends MiniMax the current target model and bills at that model's price. See [Latest model aliases](../model_latest_aliases.md) for how aliases work and the full list across providers.
+
+| Alias | Model family |
+| --- | --- |
+| `minimax/minimax-latest` | MiniMax |
+
+## MiniMax - Text-to-Speech
+
+### Quick Start
+
+### **Linten Python SDK Usage**
+
+#### Basic Usage
+
+```python
+from pathlib import Path
+from linten import speech
+import os 
+
+os.environ["MINIMAX_API_KEY"] = "your-api-key"
+
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="The quick brown fox jumped over the lazy dogs",
+)
+response.stream_to_file(speech_file_path)
+```
+
+#### Async Usage
+
+```python
+from linten import aspeech
+from pathlib import Path
+import os, asyncio
+
+os.environ["MINIMAX_API_KEY"] = "your-api-key"
+
+async def test_async_speech(): 
+    speech_file_path = Path(__file__).parent / "speech.mp3"
+    response = await aspeech(
+        model="minimax/speech-2.6-hd",
+        voice="alloy",
+        input="The quick brown fox jumped over the lazy dogs",
+    )
+    response.stream_to_file(speech_file_path)
+
+asyncio.run(test_async_speech())
+```
+
+#### Voice Selection
+
+MiniMax supports many voices. Linten provides OpenAI-compatible voice names that map to MiniMax voices:
+
+```python
+from linten import speech
+
+# OpenAI-compatible voice names
+voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+
+for voice in voices:
+    response = speech(
+        model="minimax/speech-2.6-hd",
+        voice=voice,
+        input=f"This is the {voice} voice",
+    )
+    response.stream_to_file(f"speech_{voice}.mp3")
+```
+
+You can also use MiniMax-native voice IDs directly:
+
+```python
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="male-qn-qingse",  # MiniMax native voice ID
+    input="Using native MiniMax voice ID",
+)
+```
+
+#### Custom Parameters
+
+MiniMax TTS supports additional parameters for fine-tuning audio output:
+
+```python
+from linten import speech
+
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="Custom audio parameters",
+    speed=1.5,  # Speed: 0.5 to 2.0
+    response_format="mp3",  # Format: mp3, pcm, wav, flac
+    extra_body={
+        "vol": 1.2,  # Volume: 0.1 to 10
+        "pitch": 2,  # Pitch adjustment: -12 to 12
+        "sample_rate": 32000,  # 16000, 24000, or 32000
+        "bitrate": 128000,  # For MP3: 64000, 128000, 192000, 256000
+        "channel": 1,  # 1 for mono, 2 for stereo
+    }
+)
+response.stream_to_file("custom_speech.mp3")
+```
+
+#### Response Formats
+
+```python
+from linten import speech
+
+# MP3 format (default)
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="MP3 format audio",
+    response_format="mp3",
+)
+
+# PCM format
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="PCM format audio",
+    response_format="pcm",
+)
+
+# WAV format
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="WAV format audio",
+    response_format="wav",
+)
+
+# FLAC format
+response = speech(
+    model="minimax/speech-2.6-hd",
+    voice="alloy",
+    input="FLAC format audio",
+    response_format="flac",
+)
+```
+
+### **Linten Proxy Usage**
+
+Linten provides an OpenAI-compatible `/audio/speech` endpoint for MiniMax TTS.
+
+#### Setup
+
+Add MiniMax to your proxy configuration:
+
+```yaml
+model_list:
+  - model_name: tts
+    linten_params:
+      model: minimax/speech-2.6-hd
+      api_key: os.environ/MINIMAX_API_KEY
+  
+  - model_name: tts-turbo
+    linten_params:
+      model: minimax/speech-2.6-turbo
+      api_key: os.environ/MINIMAX_API_KEY
+```
+
+Start the proxy:
+
+```bash
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### Making Requests
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts",
+    "input": "The quick brown fox jumped over the lazy dog.",
+    "voice": "alloy"
+  }' \
+  --output speech.mp3
+```
+
+With custom parameters:
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts",
+    "input": "Custom parameters example.",
+    "voice": "nova",
+    "speed": 1.5,
+    "response_format": "mp3",
+    "extra_body": {
+      "vol": 1.2,
+      "pitch": 1,
+      "sample_rate": 32000
+    }
+  }' \
+  --output custom_speech.mp3
+```
+
+### Voice Mappings
+
+Linten maps OpenAI-compatible voice names to MiniMax voice IDs:
+
+| OpenAI Voice | MiniMax Voice ID | Description |
+|--------------|------------------|-------------|
+| alloy | male-qn-qingse | Male voice |
+| echo | male-qn-jingying | Male voice |
+| fable | female-shaonv | Female voice |
+| onyx | male-qn-badao | Male voice |
+| nova | female-yujie | Female voice |
+| shimmer | female-tianmei | Female voice |
+
+You can also use any MiniMax-native voice ID directly by passing it as the `voice` parameter.
+
+
+#### Streaming (WebSocket)
+
+:::note
+The current implementation uses MiniMax's HTTP endpoint. For WebSocket streaming support, please refer to MiniMax's official documentation at [https://platform.minimax.io/docs](https://platform.minimax.io/docs).
+:::
+
+### Error Handling
+
+```python
+from linten import speech
+import linten
+
+try:
+    response = speech(
+        model="minimax/speech-2.6-hd",
+        voice="alloy",
+        input="Test input",
+    )
+    response.stream_to_file("output.mp3")
+except linten.exceptions.BadRequestError as e:
+    print(f"Bad request: {e}")
+except linten.exceptions.AuthenticationError as e:
+    print(f"Authentication failed: {e}")
+except Exception as e:
+    print(f"Error: {e}")
+```
+
+#### Extra Body Parameters
+
+Pass these via `extra_body`:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| vol | float | Volume (0.1 to 10) | 1.0 |
+| pitch | int | Pitch adjustment (-12 to 12) | 0 |
+| sample_rate | int | Sample rate: 16000, 24000, 32000 | 32000 |
+| bitrate | int | Bitrate for MP3: 64000, 128000, 192000, 256000 | 128000 |
+| channel | int | Audio channels: 1 (mono) or 2 (stereo) | 1 |
+| output_format | string | Output format: "hex" or "url" (url returns a URL valid for 24 hours) | hex |
+
+## MiniMax - Video Generation
+
+<SinceVersion v="1.107.0" />
+
+MiniMax-H3 and MiniMax-H3-Max run as async tasks on MiniMax's V2 video task API. `video_generation` returns a job id right away; poll `video_status` until it reports `completed`, then download the mp4 with `video_content`. Calling `video_content` before then returns a 400 that says the video is still processing.
+
+Earlier releases return a 500 that says video generation is not supported for minimax.
+
+```python showLineNumbers title="MiniMax Video Generation"
+import os
+import time
+from linten import video_content, video_generation, video_status
+
+os.environ["MINIMAX_API_KEY"] = "your-api-key"
+
+video = video_generation(
+    model="minimax/MiniMax-H3",
+    prompt="A paper boat drifting down a rain-soaked city gutter",
+    seconds="5",
+    size="1280x720",
+)
+
+while video.status not in ("completed", "failed", "cancelled"):
+    time.sleep(20)
+    video = video_status(video_id=video.id)
+
+if video.status == "completed":
+    with open("video.mp4", "wb") as f:
+        f.write(video_content(video_id=video.id))
+```
+
+`seconds` sets the duration and `size` sets the aspect ratio, so `1280x720` is sent as `16:9`. You can also pass `ratio` directly. `resolution` picks the output tier: `768P` (the default) or `2K` on MiniMax-H3, and `480P` or `768P` on MiniMax-H3-Max. Without `seconds` the job runs for 5 seconds, and a text-only request without `size` or `ratio` runs at 16:9. MiniMax accepts the ratios 16:9, 4:3, 1:1, 3:4, 9:16, 21:9 and `adaptive`, so a `size` such as `1792x1024` (7:4) gets MiniMax's 400. MiniMax-H3 runs 4 to 15 seconds and MiniMax-H3-Max 5 to 15.
+
+For image-to-video, pass the first frame as `input_reference`, either as a URL or as a file (an open file, bytes, or a `(filename, file, content_type)` tuple). For reference-to-video, pass MiniMax `image_url` and `audio_url` items in `content` instead, each with a `role` of `reference_image` or `reference_audio`. MiniMax does not take references together with a first frame.
+
+The text of the request always comes from `prompt`, so text items in `content` are rejected. Guardrails that implement `apply_guardrail`, such as `linten_content_filter`, scan that `prompt`, while other guardrail hooks may not scan `/v1/videos` requests, and no guardrail scans the image and audio references.
+
+Video calls read `MINIMAX_API_BASE` too. If you exported the `/anthropic/v1/messages` URL from the `/v1/messages` section, video calls return a 404, so set it to `https://api.minimax.io/anthropic`, which works for both, or pass `api_base="https://api.minimax.io/v1"` on video calls only.
+
+These requests return a 400 instead of reaching MiniMax:
+
+- reference video input (a `video_url` item in `content`), since MiniMax bills its duration only after the task is created
+- remix, since MiniMax regeneration only upscales a finished 768P task to 2K and ignores the prompt
+- `video_list` in the Python SDK with `after` or `order="asc"`, since MiniMax pages by number and returns newest first. Pass `extra_query={"page_num": 2}` for a later page
+- `video_content` in the Python SDK with a `variant` other than `video`, since MiniMax only serves the mp4
+- a `resolution` the model has no price for, such as `480P` on MiniMax-H3, unless `drop_params` is on, which sends the 768P default instead
+- any other parameter MiniMax cannot honor, such as `seed`, `n`, `quality` or `negative_prompt`, unless `drop_params` is on
+
+Spend is logged at create time from the model's per-second rate at the resolution sent to MiniMax, plus each input image beyond MiniMax's free allowance (5 on MiniMax-H3, 2 on MiniMax-H3-Max).
+
+To serve these models on the proxy, add a deployment and call `/v1/videos`:
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: minimax-h3
+    linten_params:
+      model: minimax/MiniMax-H3
+      api_key: os.environ/MINIMAX_API_KEY
+```
+
+```bash showLineNumbers title="Video generation via Proxy - cURL"
+curl http://localhost:4000/v1/videos \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "minimax-h3",
+    "prompt": "A paper boat drifting down a rain-soaked city gutter",
+    "seconds": "5",
+    "size": "1280x720"
+  }'
+
+curl http://localhost:4000/v1/videos/$VIDEO_ID \
+  -H "Authorization: Bearer $LINTEN_API_KEY"
+
+curl http://localhost:4000/v1/videos/$VIDEO_ID/content \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -o video.mp4
+```
+
+The proxy's `/content` route always returns the mp4, since it does not read `variant`. The cost map marks both models as `video_generation`, so a proxy health check on these deployments creates a real 5 second video, which MiniMax bills. With `background_health_checks` on, set `disable_background_health_check: true` in the deployment's `model_info`.
+
+To list your MiniMax tasks, call `linten.video_list(custom_llm_provider="minimax")` from the Python SDK. MiniMax returns no cursor, so `has_more` is always `false` and later pages come from `extra_query={"page_num": N}`. On the proxy, `GET /v1/videos?custom_llm_provider=minimax` returns only the first page, newest first, and ignores `after`, `order`, `limit` and `page_num`.

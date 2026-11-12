@@ -1,0 +1,1031 @@
+---
+title: "Fallbacks (Provider Failover)"
+description: "Set up automatic provider failover in Linten. If a model or provider fails after num_retries, fallback to another model group for high availability and reliability."
+keywords:
+  [
+    fallbacks,
+    failover,
+    provider failover,
+    model failover,
+    automatic failover,
+    high availability,
+    reliability,
+    retries,
+    backup model,
+    cross-provider failover,
+  ]
+sidebar_label: "Fallbacks"
+---
+
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Fallbacks (Provider Failover)
+
+Fallbacks are how Linten does automatic **failover**. If a call fails after num_retries, Linten falls back to another model group, so a failing model or provider automatically fails over to a healthy backup. If you are looking for "provider failover" or "model failover", this is the page. 
+
+- Quick Start [load balancing](./load_balancing.md)
+- Quick Start [client side fallbacks](./client_side_fallbacks.md)
+
+
+Fallbacks are typically done from one `model_name` to another `model_name`. 
+
+## Quick Start 
+
+### 1. Setup fallbacks
+
+Key change: 
+
+```python
+fallbacks=[{"{{openai_small}}": ["{{openai_large}}"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python keep-model-ids
+from linten import Router 
+router = Router(
+  model_list=[
+    {
+      "model_name": "{{openai_small}}",
+      "linten_params": {
+        "model": "azure/<your-deployment-name>",
+        "api_base": "<your-azure-endpoint>",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    },
+    {
+      "model_name": "{{openai_large}}",
+      "linten_params": {
+        "model": "azure/gpt-4-ca",
+        "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    }
+  ],
+  fallbacks=[{"{{openai_small}}": ["{{openai_large}}"]}] # KEY CHANGE
+)
+
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+
+```yaml keep-model-ids
+model_list:
+  - model_name: {{openai_small}}
+    linten_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: {{openai_large}}
+    linten_params:
+      model: azure/gpt-4-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+      rpm: 6
+
+router_settings:
+  fallbacks: [{"{{openai_small}}": ["{{openai_large}}"]}]
+```
+
+
+</TabItem>
+</Tabs>
+
+
+### 2. Start Proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+### 3. Test Fallbacks
+
+:::warning[Deprecated for Proxy requests]
+Starting in Linten Proxy v1.85.0, `mock_testing_fallbacks`, `mock_testing_context_fallbacks`, and `mock_testing_content_policy_fallbacks` are stripped from incoming Proxy requests and have no effect. These flags remain supported only for direct `linten.Router` calls in tests.
+:::
+
+For direct `Router` tests, pass `mock_testing_fallbacks=True` to trigger fallbacks.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+```python
+
+from linten import Router
+
+model_list = [{...}, {...}] # defined in Step 1.
+
+router = Router(model_list=model_list, fallbacks=[{"bad-model": ["my-good-model"]}])
+
+response = router.completion(
+  model="bad-model",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
+  mock_testing_fallbacks=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The mock-testing flags are deprecated for Proxy requests. To validate Proxy fallbacks, trigger an actual provider error in a non-production environment and send a normal request without a `mock_testing_*` flag.
+
+</TabItem>
+</Tabs>
+
+
+
+
+### Explanation
+
+Fallbacks are done in-order - `["{{openai_small}}", "{{openai_large}}", "{{anthropic}}"]`, will do `{{openai_small}}` first, then `{{openai_large}}`, etc.
+
+You can also set [`default_fallbacks`](#default-fallbacks), in case a specific model group is misconfigured / bad.
+
+There are 3 types of fallbacks: 
+- `content_policy_fallbacks`: For linten.ContentPolicyViolationError - Linten maps content policy violation errors across providers [**See Code**](https://github.com/LintenAI/linten/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/linten/utils.py#L8495C27-L8495C54)
+- `context_window_fallbacks`: For linten.ContextWindowExceededErrors - Linten maps context window error messages across providers [**See Code**](https://github.com/LintenAI/linten/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/linten/utils.py#L8469)
+- `fallbacks`: For all remaining errors - e.g. linten.RateLimitError
+
+A fallback to a deployment on another provider, or on another API key, cannot decrypt the encrypted reasoning the failed deployment produced on earlier turns (the Responses API reasoning items a client replays with `include: ["reasoning.encrypted_content"]`, or the thinking blocks of a `/v1/messages` conversation). The fallback drops what the target cannot decrypt and keeps each Responses reasoning item's readable summary (a thinking block is dropped whole), so the fallback target reasons fresh on that turn and answers instead of failing with `invalid_encrypted_content`. This happens on every fallback: the three types above, an [order-based fallback](./load_balancing.md#how-order-based-fallback-works) between the deployments of one model group, and the fallback of a stream that broke mid-stream. There is no per-deployment switch for it. For an ordered group of two providers also turn on [`encrypted_content_affinity`](../response_api.md#when-the-originating-deployment-cannot-serve-the-turn): it marks each reasoning item with the deployment that produced it, so a turn dispatched straight to `order: 2` while `order: 1` is cooled down (no fallback, so no strip) drops the reasoning too, and the turn after a fallback keeps the reasoning of the deployment that answers it instead of paying one failed call first
+
+## Client Side Fallbacks
+
+To set fallbacks per request from the client or the Python SDK, see [Client-Side Fallbacks](./client_side_fallbacks.md).
+
+## Content Policy Violation Fallback
+
+Key change: 
+
+```python
+content_policy_fallbacks=[{"{{anthropic}}": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import Router 
+
+router = Router(
+  model_list=[
+    {
+      "model_name": "{{anthropic}}",
+      "linten_params": {
+        "model": "{{anthropic}}",
+        "api_key": "",
+        "mock_response": Exception("content filtering policy"),
+      },
+    },
+    {
+      "model_name": "my-fallback-model",
+      "linten_params": {
+        "model": "{{anthropic}}",
+        "api_key": "",
+        "mock_response": "This works!",
+      },
+    },
+  ],
+  content_policy_fallbacks=[{"{{anthropic}}": ["my-fallback-model"]}], # KEY CHANGE
+  # fallbacks=[..], # [OPTIONAL]
+  # context_window_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+  model="{{anthropic}}",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line
+
+```yaml
+router_settings:
+  content_policy_fallbacks: [{"{{anthropic}}": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
+## Context Window Exceeded Fallback
+
+Key change: 
+
+```python
+context_window_fallbacks=[{"{{anthropic}}": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import Router 
+
+router = Router(
+  model_list=[
+    {
+      "model_name": "{{anthropic}}",
+      "linten_params": {
+        "model": "{{anthropic}}",
+        "api_key": "",
+        "mock_response": Exception("prompt is too long"),
+      },
+    },
+    {
+      "model_name": "my-fallback-model",
+      "linten_params": {
+        "model": "{{anthropic}}",
+        "api_key": "",
+        "mock_response": "This works!",
+      },
+    },
+  ],
+  context_window_fallbacks=[{"{{anthropic}}": ["my-fallback-model"]}], # KEY CHANGE
+  # fallbacks=[..], # [OPTIONAL]
+  # content_policy_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+  model="{{anthropic}}",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line
+
+```yaml
+router_settings:
+  context_window_fallbacks: [{"{{anthropic}}": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
+## Advanced
+### Fallbacks + Retries + Timeouts + Cooldowns
+
+To set fallbacks, just do: 
+
+```
+linten_settings:
+  fallbacks: [{"zephyr-beta": ["{{openai_small}}"]}] 
+```
+
+**Covers all errors (429, 500, etc.)**
+
+**Set via config**
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+  - model_name: {{openai_small}}
+    linten_params:
+        model: {{openai_small}}
+        api_key: <my-openai-key>
+  - model_name: {{openai_large}}
+    linten_params:
+        model: {{openai_large}}
+        api_key: <my-openai-key>
+
+linten_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets linten.request_timeout 
+  fallbacks: [{"zephyr-beta": ["{{openai_small}}"]}] # fallback to {{openai_small}} if call fails num_retries 
+
+router_settings:
+  allowed_fails: 3 # cooldown a deployment once it fails more than 3 calls within cooldown_time
+  cooldown_time: 30 # (in seconds) how long a deployment stays in cooldown
+```
+
+### Fallback to Specific Model ID
+
+If all models in a group are in cooldown (e.g. rate limited), Linten will fallback to the model with the specific model ID.
+
+This skips any cooldown check for the fallback model.
+
+1. Specify the model ID in `model_info`
+```yaml keep-model-ids
+model_list:
+  - model_name: {{openai_large}}
+    linten_params:
+      model: openai/{{openai_large}}
+    model_info:
+      id: my-specific-model-id # KEY CHANGE
+  - model_name: {{openai_large}}
+    linten_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: anthropic-claude
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Note:** This will only fallback to the model with the specific model ID. If you want to fallback to another model group, you can set `fallbacks=[{"{{openai_large}}": ["anthropic-claude"]}]`
+
+2. Set fallbacks in config
+
+```yaml
+linten_settings:
+  fallbacks: [{"{{openai_large}}": ["my-specific-model-id"]}]
+```
+
+3. Test it while the primary deployment is unavailable.
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{openai_large}}",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ]
+}'
+```
+
+Validate it works, by checking the response header `x-linten-model-id`
+
+```bash
+x-linten-model-id: my-specific-model-id
+```
+
+### Test Fallbacks! 
+
+Check if your fallbacks are working as expected by triggering the relevant provider error in a non-production environment.
+
+#### **Regular Fallbacks**
+
+Make the primary test deployment return a retryable provider error, such as a rate-limit or server error, then send a normal request.
+
+
+#### **Content Policy Fallbacks**
+
+Use a test request that the primary provider rejects with a content-policy error.
+
+#### **Context Window Fallbacks**
+
+Enable pre-call checks and send a test request that exceeds the primary model's configured context window.
+
+
+### Track Fallbacks in Spend Logs
+
+Every spend log row records whether the request was served by the model group the client asked for, or by a fallback. The proxy writes two keys into the `metadata` column of `Linten_SpendLogs`:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `attempted_fallbacks` | int | Number of fallback attempts made. `0` means the requested model group served the request |
+| `original_model_group` | str | The model group the client originally requested |
+
+For example, a request to `{{openai_small}}` that fails over to `claude-fable-5` produces a row with `model_group=claude-fable-5`, `attempted_fallbacks=1`, and `original_model_group={{openai_small}}`, so fallback-served and directly-served requests stay distinguishable after the fact:
+
+```sql
+SELECT model_group,
+       metadata->>'attempted_fallbacks' AS attempted_fallbacks,
+       metadata->>'original_model_group' AS original_model_group
+FROM "Linten_SpendLogs";
+```
+
+Both keys are set by the proxy and overwrite any client-supplied values of the same name. Rows written before this feature read `null` for both keys.
+
+### Context error fallback precedence
+
+After retry handling, a `ContextWindowExceededError` uses the `context_window_fallbacks` chain that matches the requested model group. A matching chain takes priority over later `order` levels and generic `fallbacks`. The same lookup supports wildcard fallback keys.
+
+If no context window rule matches, the router tries the remaining `order` levels in the group, then its generic `fallbacks`. A context window rule for another group does not disable these routes. If a matching context window chain is exhausted, the request returns an error rather than continuing through the original group's order or generic fallback chain. Include every desired backup in the matching context chain.
+
+| Configuration for the requested group | Recovery after a context error |
+| --- | --- |
+| Matching `context_window_fallbacks` rule | Use that chain before later orders or generic fallbacks |
+| No matching rule, with later `order` levels | Try later orders, then generic fallbacks |
+| No matching rule or later orders | Try generic fallbacks |
+| Context window rule for another group only | Follow this group's order and generic fallback settings |
+
+For example, both deployments named `chat` belong to one group. The second deployment is an ordered backup. The `other` group has its own context fallback, which does not affect requests to `chat`.
+
+```yaml
+model_list:
+  - model_name: chat
+    linten_params:
+      model: openai/{{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+      order: 1
+  - model_name: chat
+    linten_params:
+      model: openai/{{openai_large}}
+      api_key: os.environ/OPENAI_API_KEY
+      order: 2
+  - model_name: other
+    linten_params:
+      model: openai/{{openai_small}}
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: large-context
+    linten_params:
+      model: openai/{{openai_large}}
+      api_key: os.environ/OPENAI_API_KEY
+router_settings:
+  context_window_fallbacks:
+    - other: [large-context]
+```
+
+If the first `chat` deployment returns a context window error, the router tries its `order: 2` deployment. Adding `- chat: [large-context]` under `context_window_fallbacks` instead sends that error directly to `large-context` after retry handling.
+
+Sibling retries, order failover, and cross-group fallbacks are separate operations. A sibling retry selects another eligible deployment in the current group and order level within the retry budget. Setting `num_retries: 0` disables those retries without disabling order or cross-group failover. Order failover advances to a later order. A context window fallback changes groups. `enable_weighted_failover` remains excluded for context window errors and content policy errors.
+
+These rules apply to errors Linten classifies as `ContextWindowExceededError`, including provider refusals. `enable_pre_call_checks` additionally checks declared input limits before contacting the provider. The existing `max_fallbacks` limit still bounds the chain. A fallback deployment must still accept the prompt and pass access, health, and other routing checks.
+
+### Context Window Fallbacks (Pre-Call Checks + Fallbacks)
+
+**Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
+
+[**See Code**](https://github.com/LintenAI/linten/blob/c9e6b05cfb20dfb17272218e2555d6b496c47f6f/linten/router.py#L2163)
+
+:::important
+**`enable_pre_call_checks` is required** for context-window enforcement. Without it, requests are sent to the provider regardless of input token count. Set `enable_pre_call_checks: true` in `router_settings` in your config.
+:::
+
+#### Custom max_input_tokens per deployment
+
+You can override the default context limit for a deployment by setting `max_input_tokens` in `model_info`. This is useful for testing, rate-limiting long prompts, or enforcing stricter limits than the provider's default.
+
+**Both** of the following are required:
+
+1. **`router_settings.enable_pre_call_checks: true`** — enables pre-call checks
+2. **`model_info.max_input_tokens`** on the deployment, which overrides the limit for that model
+
+```yaml
+router_settings:
+  enable_pre_call_checks: true  # Required for enforcement
+
+model_list:
+  - model_name: {{openai_large}}
+    linten_params:
+      model: openai/{{openai_large}}
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      max_input_tokens: 10  # Override: reject prompts > 10 tokens
+```
+
+If a request exceeds the limit, Linten raises `ContextWindowExceededError` with details like `Model={{openai_large}}, Max Input Tokens=10, Got=306`.
+
+**1. Setup config**
+
+For azure deployments, set the base model. Pick the base model from [this list](https://github.com/LintenAI/linten/blob/main/model_prices_and_context_window.json), all the azure models start with azure/.
+
+
+<Tabs>
+<TabItem value="same-group" label="Same Group">
+
+Filter instances of a model (e.g. gpt-5.4-mini) with smaller context windows
+
+The model ids in this example are illustrative and kept for their context window sizes.
+
+```yaml keep-model-ids
+router_settings:
+  enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+  - model_name: gpt-5.4-mini
+    linten_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4.1 # 2. (azure-only) SET BASE MODEL
+
+  - model_name: gpt-5.4-mini
+    linten_params:
+      model: gpt-5.4-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LINTEN_MASTER_KEY
+```
+
+**2. Start proxy**
+
+```bash
+export LINTEN_MASTER_KEY="sk-$(openssl rand -hex 32)"
+printf 'Local proxy key: %s\n' "$LINTEN_MASTER_KEY"
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+The test prompt is about 320,000 tokens, so the Azure deployment needs a tokens-per-minute quota above that. A deployment with a lower quota is rate limited, and the proxy then reports a context window error instead of the rate limit.
+
+In another terminal, set `LINTEN_API_KEY` to the key printed above, then run:
+
+```python keep-model-ids
+import os
+import openai
+client = openai.OpenAI(
+    api_key=os.environ["LINTEN_API_KEY"],
+    base_url="http://0.0.0.0:4000"
+)
+
+text = "What is the meaning of 42?" * 40000
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(
+    model="gpt-5.4-mini",
+    messages = [
+      {"role": "system", "content": text},
+      {"role": "user", "content": "Who was Alexander?"},
+    ],
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="different-group" label="Context Window Fallbacks (Different Groups)">
+
+Fallback to larger models if current model is too small.
+
+The model ids in this example are illustrative and kept for their context window sizes.
+
+```yaml keep-model-ids
+general_settings:
+  master_key: os.environ/LINTEN_MASTER_KEY
+
+router_settings:
+  enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+  - model_name: small-model
+    linten_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4o # 2. (azure-only) SET BASE MODEL
+
+  - model_name: large-model
+    linten_params:
+      model: {{openai_large}}
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-opus
+    linten_params:
+      model: claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+linten_settings:
+  context_window_fallbacks: [{"small-model": ["large-model", "claude-opus"]}]
+```
+
+**2. Start proxy**
+
+```bash
+export LINTEN_MASTER_KEY="sk-$(openssl rand -hex 32)"
+printf 'Local proxy key: %s\n' "$LINTEN_MASTER_KEY"
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+In another terminal, set `LINTEN_API_KEY` to the key printed above, then run:
+
+```python keep-model-ids
+import os
+import openai
+client = openai.OpenAI(
+    api_key=os.environ["LINTEN_API_KEY"],
+    base_url="http://0.0.0.0:4000"
+)
+
+text = "What is the meaning of 42?" * 25000
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(
+    model="small-model",
+    messages = [
+      {"role": "system", "content": text},
+      {"role": "user", "content": "Who was Alexander?"},
+    ],
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Content Policy Fallbacks
+
+Fallback across providers (e.g. from Azure OpenAI to Anthropic) if you hit content policy violation errors. 
+
+```yaml keep-model-ids
+model_list:
+    - model_name: small-model
+      linten_params:
+        model: azure/chatgpt-v-2
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+
+    - model_name: claude-opus
+      linten_params:
+        model: {{anthropic_large}}
+        api_key: os.environ/ANTHROPIC_API_KEY
+
+linten_settings:
+  content_policy_fallbacks: [{"small-model": ["claude-opus"]}]
+```
+
+
+
+### Default Fallbacks 
+
+You can also set default_fallbacks, in case a specific model group is misconfigured / bad.
+
+
+```yaml keep-model-ids
+model_list:
+    - model_name: small-model
+      linten_params:
+        model: azure/chatgpt-v-2
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+
+    - model_name: claude-opus
+      linten_params:
+        model: {{anthropic_large}}
+        api_key: os.environ/ANTHROPIC_API_KEY
+
+linten_settings:
+  default_fallbacks: ["claude-opus"]
+```
+
+This will default to claude-opus in case any model fails.
+
+A model-specific fallbacks (e.g. `{"small-model": ["claude-opus"]}`) overrides default fallback.
+
+### EU-Region Filtering (Pre-Call Checks)
+
+**Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
+
+Set 'region_name' of deployment. 
+
+**Note:** Linten can automatically infer region_name for Vertex AI, Bedrock, and IBM WatsonxAI based on your linten params. For Azure, set `linten.enable_preview = True`.
+
+**1. Set Config**
+
+```yaml keep-model-ids
+router_settings:
+  enable_pre_call_checks: true # 1. Enable pre-call checks
+
+model_list:
+- model_name: {{openai_small}}
+  linten_params:
+    model: azure/chatgpt-v-2
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2023-07-01-preview"
+    region_name: "eu" # SET EU-REGION
+
+- model_name: {{openai_small}}
+  linten_params:
+    model: {{openai_small}}
+    api_key: os.environ/OPENAI_API_KEY
+
+- model_name: {{gemini_flash}}
+  linten_params:
+    model: vertex_ai/{{gemini_flash}}
+    vertex_project: adroit-crow-1234
+    vertex_location: us-east1 # AUTOMATICALLY INFERS 'region_name'
+```
+
+**2. Start proxy**
+
+```bash
+linten --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.with_raw_response.create(
+    model="{{openai_small}}",
+    messages = [{"role": "user", "content": "Who was Alexander?"}]
+)
+
+print(response)
+
+print(response.headers.get('x-linten-model-api-base'))
+```
+
+### Vision Capability Filtering (Image Requests)
+
+**Before call is made** Linten removes deployments declared text-only from the candidates for a request that carries an image, meaning a `/v1/chat/completions` call with an `image_url` content part, a `/v1/responses` call with an `input_image` item, or a `/v1/messages` call with an `image` block. This runs on by default under every routing strategy and does not need `enable_pre_call_checks: true`.
+
+A deployment is text-only when `model_info.supports_vision: false` is set, or when that key is unset and the model catalog says `supports_vision: false` for `model_info.base_model`, then `linten_params.base_model`, then the model name. A deployment with no declaration and no catalog entry stays eligible, so declare `supports_vision: false` on custom text-only deployments. When every deployment in the group is text-only nothing is removed and the provider's own error is returned, which keeps the earlier behavior for groups that only ever served text. The `x-linten-model-id` response header names the deployment that served, or failed, the request.
+
+**1. Set Config**
+
+The Bedrock gpt-oss deployment below needs no declaration because the model catalog already marks it text-only. The custom deployment does.
+
+```yaml
+model_list:
+  - model_name: mixed
+    linten_params:
+      model: openai/gpt-5.6
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: mixed
+    linten_params:
+      model: bedrock/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+  - model_name: mixed
+    linten_params:
+      model: hosted_vllm/my-text-only-model
+      api_base: os.environ/TEXT_API_BASE
+    model_info:
+      supports_vision: false
+
+router_settings:
+  routing_strategy: latency-based-routing
+```
+
+**2. Test it**
+
+```bash
+curl -i http://0.0.0.0:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mixed",
+    "messages": [{"role": "user", "content": [
+      {"type": "text", "text": "What is in this image?"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+    ]}]
+  }'
+```
+
+The `x-linten-model-id` header names the `openai/gpt-5.6` deployment every time, while a plain text request can still land on any of the three.
+
+### Setting Fallbacks for Wildcard Models
+
+You can set fallbacks for wildcard models (e.g. `azure/*`) in your config file.
+
+1. Setup config
+```yaml
+model_list:
+  - model_name: "{{openai_large}}"
+    linten_params:
+      model: "openai/{{openai_large}}"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "azure/*"
+    linten_params:
+      model: "azure/*"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+
+linten_settings:
+  fallbacks: [{"{{openai_large}}": ["azure/{{openai_large}}"]}]
+```
+
+2. Start Proxy
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it while the primary deployment is unavailable.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+    "model": "{{openai_large}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": [    
+          {
+            "type": "text",
+            "text": "what color is red"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+}'
+```
+
+#### Provider-prefixed fallback keys for bare model names
+
+A request for a bare model name such as `{{anthropic}}`, the form Claude Code sends, is served by the `anthropic/*` deployment, and the fallback lookup matches it against a key written the way that wildcard is, `anthropic/{{anthropic}}`. Linten infers the provider the same way routing does and only tries this when some fallback key ends in `/<model name>`, so an alias that resolves to no provider still falls through to `*`. Precedence is the exact key first, then the sibling key (the `<provider>/<model>` spelling of a bare name, or the bare spelling of a prefixed name), then `*`, and the same lookup serves `fallbacks`, `context_window_fallbacks`, and `content_policy_fallbacks`. A matched chain is terminal: once the `anthropic/{{anthropic}}` chain is chosen, `*` is not tried after its targets fail, so list the `*` targets at the end of that chain when they should run too. Added in [PR #43062](https://github.com/LintenAI/linten/pull/43062), coming to the next release candidate
+
+```yaml
+model_list:
+  - model_name: "anthropic/*"
+    linten_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "openai/{{openai_large}}"
+    linten_params:
+      model: "openai/{{openai_large}}"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "{{openai_small}}"
+    linten_params:
+      model: "openai/{{openai_small}}"
+      api_key: os.environ/OPENAI_API_KEY
+
+linten_settings:
+  fallbacks:
+    - {"anthropic/{{anthropic}}": ["openai/{{openai_large}}", "{{openai_small}}"]}
+    - {"*": ["{{openai_small}}"]}
+```
+
+A request for `{{anthropic}}` that fails on `anthropic/*` is retried on `openai/{{openai_large}}` and then on `{{openai_small}}`, while a request for any other bare name without a key of its own goes straight to `*`
+
+### Enforce Key Model Access on Fallbacks
+
+The proxy applies the calling key's, team's and project's model access checks to every fallback target before it is tried, so a fallback never serves a model the caller could not call directly. Targets the caller may not use are skipped. When no authorized target remains, the caller gets the primary model's own error. Keys that are allowed to call the fallback model keep falling back as before, and the check covers `fallbacks`, `context_window_fallbacks`, `content_policy_fallbacks` and `default_fallbacks`.
+
+```yaml keep-model-ids
+model_list:
+  - model_name: gpt-5.6
+    linten_params:
+      model: openai/gpt-5.6
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["openai-only"]
+  - model_name: {{anthropic}}
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  fallbacks:
+    - gpt-5.6: ["{{anthropic}}"]
+
+general_settings:
+  master_key: os.environ/LINTEN_MASTER_KEY
+```
+
+A key created with `"models": ["openai-only"]` can call `gpt-5.6` but not `{{anthropic}}`. A failing `gpt-5.6` request from that key returns the OpenAI error instead of a `{{anthropic}}` completion, and the response carries no `x-linten-attempted-fallbacks` header. A key created with `"models": ["openai-only", "{{anthropic}}"]` still falls back.
+
+Requests that carry no virtual key, such as the proxy's own health checks, are never restricted. If the access lookup itself fails, the fallback is skipped rather than allowed.
+
+Set `general_settings.enforce_fallback_model_access: false` to skip this check, so every configured fallback runs whatever the caller's model access. Fallbacks of a search request are still checked against the key's, team's and user's search tool grants.
+
+```yaml
+general_settings:
+  enforce_fallback_model_access: false
+```
+
+:::warning
+
+Earlier releases ran a fallback even when the caller could not call the fallback model. If your deployment relies on that, grant the callers access to the fallback models or set `enforce_fallback_model_access: false`. Otherwise those requests return the primary model's error after you upgrade.
+
+:::
+
+### Enforce Budget on Fallbacks
+
+Budget is checked once, when the request is authenticated, against the model the caller asked for. The fallback target is picked afterwards, so on its own that check cannot see the model that actually bills. This matters most when the primary model is priced at zero: a zero-cost model is exempt from budget checks entirely, so without a second check a request for it is admitted, falls back to the paid model, and bills in full with no cap applied.
+
+The proxy re-checks the calling key's and user's budget against every fallback target before it is tried, so this needs no configuration. Over-budget targets are skipped. When no affordable target remains, the caller gets the primary model's own error. The primary attempt itself is never blocked, so a zero-cost model keeps working at the cap, and a zero-cost fallback target is always allowed. The check covers `fallbacks`, `context_window_fallbacks`, `content_policy_fallbacks` and `default_fallbacks`.
+
+```yaml keep-model-ids
+model_list:
+  - model_name: free-model
+    linten_params:
+      model: ollama/llama2
+      api_base: http://localhost:11434
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+  - model_name: {{anthropic}}
+    linten_params:
+      model: anthropic/{{anthropic}}
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  fallbacks:
+    - free-model: ["{{anthropic}}"]
+
+general_settings:
+  master_key: os.environ/LINTEN_MASTER_KEY
+```
+
+A user whose spend has passed their `max_budget` can still call `free-model` and pay nothing. Once `free-model` fails, that user gets the `free-model` error instead of a billed `{{anthropic}}` completion, and the response carries no `x-linten-attempted-fallbacks` header. A user still under budget keeps falling back to `{{anthropic}}` as before.
+
+To turn this off and let fallbacks run whatever the caller's budget, set `enforce_fallback_budget: false`:
+
+```yaml
+general_settings:
+  enforce_fallback_budget: false
+```
+
+A team key does not inherit the key owner's personal `max_budget` unless `general_settings.apply_user_budget_to_team_keys` is set, matching how personal budgets are enforced elsewhere. Requests that carry no virtual key, such as the proxy's own health checks, are never restricted. If the spend lookup itself fails, the fallback is skipped rather than allowed.
+
+### Disable Fallbacks (Per Request/Key)
+
+
+<Tabs>
+
+<TabItem value="request" label="Per Request">
+
+You can disable fallbacks per request by setting `disable_fallbacks: true` in your request body.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "List 5 important events in the XIX century"
+        }
+    ],
+    "model": "{{openai_small}}",
+    "disable_fallbacks": true
+}'
+```
+
+</TabItem>
+
+<TabItem value="key" label="Per Key">
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "disable_fallbacks": true
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+Both forms cover every fallback the proxy would otherwise make for that request, the mid-stream one included: when the chosen deployment's stream fails before its first chunk on `/chat/completions`, `/v1/messages`, or `/v1/responses`, the request returns that deployment's own error instead of a fallback deployment's response

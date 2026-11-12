@@ -1,0 +1,845 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import SinceVersion from '@site/src/components/SinceVersion';
+
+# Config.yaml
+Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
+
+| Param Name           | Description                                                   |
+|----------------------|---------------------------------------------------------------|
+| `model_list`         | List of supported models on the server, with model-specific configs |
+| `router_settings`   | linten Router settings, example `routing_strategy="least-busy"` [**see all**](./config_settings#router_settings---reference)|
+| `linten_settings`   | linten Module settings, example `linten.drop_params=True`, `linten.set_verbose=True`, `linten.api_base`, `linten.cache` [**see all**](./config_settings#linten_settings---reference)|
+| `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` [**see all**](./config_settings#general_settings---reference)|
+| `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` [**see all**](./config_settings#environment-variables---reference)|
+
+**Complete List:** Check the Swagger UI docs on `<your-proxy-url>/#/config.yaml` (e.g. http://0.0.0.0:4000/#/config.yaml), for everything you can pass in the config.yaml.
+
+
+## Quick Start 
+
+Set a model alias for your deployments. 
+
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+In the config below:
+- `model_name`: the name to pass TO linten from the external client  
+- `linten_params.model`: the model string passed to the linten.completion() function
+
+E.g.: 
+- `model=vllm-models` will route to `openai/facebook/opt-125m`. 
+- `model={{openai_large}}` will load balance between `azure/{{openai_large}}-eu` and `azure/{{openai_large}}-ca`
+
+```yaml
+model_list:
+  - model_name: {{openai_large}} ### RECEIVED MODEL NAME ###
+    linten_params: # all params accepted by linten.completion() - https://docs.linten.ai/docs/completion/input
+      model: azure/{{openai_large}}-eu ### MODEL NAME sent to `linten.completion()` ###
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
+      rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: bedrock-claude-v1 
+    linten_params:
+      model: bedrock/us.anthropic.{{anthropic}}
+  - model_name: {{openai_large}}
+    linten_params:
+      model: azure/{{openai_large}}-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: "os.environ/AZURE_API_KEY_CA"
+      rpm: 6
+  - model_name: anthropic-claude
+    linten_params: 
+      model: bedrock/us.anthropic.{{anthropic}}
+      ### [OPTIONAL] SET AWS REGION ###
+      aws_region_name: us-east-1
+  - model_name: vllm-models
+    linten_params:
+      model: openai/facebook/opt-125m # the `openai/` prefix tells linten it's openai compatible
+      api_base: http://0.0.0.0:4000/v1
+      api_key: none
+      rpm: 1440
+    model_info: 
+      version: 2
+  
+  # Use this if you want to make requests to `{{anthropic}}`,`{{anthropic_large}}` without defining them on the config.yaml
+  # Default models
+  # Works for ALL Providers and needs the default provider credentials in .env
+  - model_name: "*" 
+    linten_params:
+      model: "*"
+
+linten_settings: # module level linten settings - https://github.com/LintenAI/linten/blob/main/linten/__init__.py
+  drop_params: True
+  success_callback: ["langfuse"] # OPTIONAL - if you want to start sending LLM Logs to Langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your env
+
+general_settings: 
+  master_key: os.environ/LINTEN_MASTER_KEY # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer $LINTEN_API_KEY)
+  alerting: ["slack"] # [OPTIONAL] If you want Slack Alerts for Hanging LLM requests, Slow llm responses, Budget Alerts. Make sure to set `SLACK_WEBHOOK_URL` in your env
+```
+:::info
+
+For more provider-specific info, [go here](../providers/)
+
+:::
+
+#### Step 2: Start Proxy with config
+
+```shell
+$ linten --config /path/to/config.yaml
+```
+
+:::tip
+
+Run with `--detailed_debug` if you need detailed debug logs 
+
+```shell
+$ linten --config /path/to/config.yaml --detailed_debug
+```
+
+:::
+
+#### Step 3: Test it
+
+Sends request to model where `model_name={{openai_large}}` on config.yaml. 
+
+If multiple with `model_name={{openai_large}}` does [Load Balancing](https://docs.linten.ai/docs/proxy/load_balancing)
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "{{openai_large}}",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+## config.yaml vs database settings
+
+<SinceVersion v="1.103.0" />
+
+Settings in `general_settings`, `router_settings`, `linten_settings`, and `environment_variables` are owned key by key. A key you declare in `config.yaml` is owned by the file, and the proxy always runs with the file's value. A key the file does not declare is owned by the database. Once `store_model_in_db` is enabled (via `general_settings.store_model_in_db: true` or `STORE_MODEL_IN_DB="True"`), the Admin UI and the `/config/update` API write those keys into the `Linten_Config` table, and the proxy applies them on startup and on every config refresh.
+
+Writes to a config-owned key are refused. Changing one from the Admin UI, `/config/update`, or `/config/field/update` returns a 400 that names the key, its section, whether a value already stored in the database for it is being ignored, and how to resolve it. This is the response from `/config/field/update`:
+
+```json
+{
+  "detail": {
+    "error": "general_settings key 'store_model_in_db' is set in the config file and cannot be changed here.",
+    "keys": ["store_model_in_db"],
+    "section": "general_settings",
+    "stored_database_values_ignored": [],
+    "resolution": "edit /app/config.yaml to change it, or remove it from the file to let the database own it"
+  }
+}
+```
+
+`/config/update` returns the same fields inside `error.message`. When the database already holds a value for the key, the error adds that the stored value is ignored and will never be applied, and lists the key in `stored_database_values_ignored`.
+
+A request that resends the value the file already holds is accepted, since it changes nothing. If the database still holds a value for a key the file now declares, for example one saved from the UI before you added the key to the YAML, that stored value is ignored and never applied. To change a config-owned key, edit `config.yaml` and restart or reload. To hand a key over to the UI, remove it from `config.yaml`, after which the database value (if any) takes effect.
+
+The ownership rule applies to those four settings sections only. `model_list` is not merged this way, since models added through the UI or API are stored in `Linten_ProxyModelTable` and served alongside your YAML models, meaning a database model never replaces a same-named YAML entry but becomes an additional deployment that gets load balanced with it (see [Model Management](./model_management.md)). With `store_model_in_db` off, the database is never read for config, so your `config.yaml` is fully authoritative.
+
+Before v1.103.0 the precedence was the reverse. The proxy deep-merged the database rows over `config.yaml`, so the database value won on any key that existed in both places, and editing that key in the YAML and restarting did not change the running value. If you run an older version, change UI-written keys in the UI (or delete the row from `Linten_Config`) rather than in the file.
+
+## LLM configs `model_list`
+
+### Model-specific params (API Base, Keys, Temperature, Max Tokens, Organization, Headers etc.)
+You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+[**All input params**](https://docs.linten.ai/docs/completion/input#input-params-1)
+
+**Step 1**: Create a `config.yaml` file. The deployments that set `temperature` use gpt-5.4-mini, since the newer default OpenAI models only accept a temperature of 1 unless reasoning is turned off.
+```yaml keep-model-ids
+model_list:
+  - model_name: gpt-4-team1
+    linten_params: # params for linten.completion() - https://docs.linten.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: eyJ0eXAiOiJ
+      seed: 12
+      max_tokens: 20
+  - model_name: gpt-4-team2
+    linten_params:
+      model: azure/gpt-5.4-mini
+      api_key: sk-123
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      temperature: 0.2
+  - model_name: openai-gpt-5.4-mini
+    linten_params:
+      model: openai/gpt-5.4-mini
+      extra_headers: {"AI-Resource Group": "ishaan-resource"}
+      api_key: sk-123
+      organization: org-ikDc4ex8NB
+      temperature: 0.2
+  - model_name: mistral-7b
+    linten_params:
+      model: ollama/mistral
+      api_base: your_ollama_api_base
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ linten --config /path/to/config.yaml
+```
+
+**Expected Logs:**
+
+Look for this line in your console logs to confirm the config.yaml was loaded in correctly.
+```
+Linten: Proxy initialized with Config, Set models:
+```
+
+### Embedding Models - Use Sagemaker, Bedrock, Azure, OpenAI, XInference
+
+See supported Embedding Providers & Models [here](https://docs.linten.ai/docs/embedding/supported_embedding)
+
+
+<Tabs>
+<TabItem value="bedrock" label="Bedrock Completion/Chat">
+
+```yaml
+model_list:
+  - model_name: bedrock-cohere
+    linten_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-west-2"
+  - model_name: bedrock-cohere
+    linten_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-2"
+  - model_name: bedrock-cohere
+    linten_params:
+      model: "bedrock/cohere.command-text-v14"
+      aws_region_name: "us-east-1"
+
+```
+
+</TabItem>
+
+<TabItem value="sagemaker" label="Sagemaker, Bedrock Embeddings">
+
+Here's how to route between GPT-J embedding (sagemaker endpoint), Amazon Titan embedding (Bedrock) and Azure OpenAI embedding on the proxy server: 
+
+```yaml
+model_list:
+  - model_name: sagemaker-embeddings
+    linten_params: 
+      model: "sagemaker/berri-benchmarking-gpt-j-6b-fp16"
+  - model_name: amazon-embeddings
+    linten_params:
+      model: "bedrock/amazon.titan-embed-text-v1"
+  - model_name: azure-embeddings
+    linten_params: 
+      model: "azure/azure-embedding-model"
+      api_base: "os.environ/AZURE_API_BASE" # os.getenv("AZURE_API_BASE")
+      api_key: "os.environ/AZURE_API_KEY" # os.getenv("AZURE_API_KEY")
+      api_version: "2023-07-01-preview"
+
+general_settings:
+  master_key: os.environ/LINTEN_MASTER_KEY # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+```
+
+</TabItem>
+
+<TabItem value="Hugging Face emb" label="Hugging Face Embeddings">
+Linten Proxy supports all <a href="https://huggingface.co/models?pipeline_tag=feature-extraction">Feature-Extraction Embedding models</a>.
+
+```yaml
+model_list:
+  - model_name: deployed-codebert-base
+    linten_params: 
+      # send request to deployed hugging face inference endpoint
+      model: huggingface/microsoft/codebert-base # add huggingface prefix so it routes to hugging face
+      api_key: hf_LdS                            # api key for hugging face inference endpoint
+      api_base: https://uysneno1wv2wd4lw.us-east-1.aws.endpoints.huggingface.cloud # your hf inference endpoint 
+  - model_name: codebert-base
+    linten_params: 
+      # no api_base set, sends request to hugging face free inference api https://api-inference.huggingface.co/models/
+      model: huggingface/microsoft/codebert-base # add huggingface prefix so it routes to hugging face
+      api_key: hf_LdS                            # api key for hugging face                     
+
+```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI Embeddings">
+
+```yaml
+model_list:
+  - model_name: azure-embedding-model # model group
+    linten_params:
+      model: azure/azure-embedding-model # model name for linten.embedding(model=azure/azure-embedding-model) call
+      api_base: your-azure-api-base
+      api_key: your-api-key
+      api_version: 2023-07-01-preview
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Embeddings">
+
+```yaml
+model_list:
+- model_name: text-embedding-ada-002 # model group
+  linten_params:
+    model: text-embedding-ada-002 # model name for linten.embedding(model=text-embedding-ada-002) 
+    api_key: your-api-key-1
+- model_name: text-embedding-ada-002 
+  linten_params:
+    model: text-embedding-ada-002
+    api_key: your-api-key-2
+```
+
+</TabItem>
+
+
+<TabItem value="xinf" label="XInference">
+
+https://docs.linten.ai/docs/providers/xinference
+
+**Note add `xinference/` prefix to `linten_params`: `model` so linten knows to route to OpenAI**
+
+```yaml
+model_list:
+- model_name: embedding-model  # model group
+  linten_params:
+    model: xinference/bge-base-en   # model name for linten.embedding(model=xinference/bge-base-en) 
+    api_base: http://0.0.0.0:9997/v1
+```
+
+</TabItem>
+
+<TabItem value="openai emb" label="OpenAI Compatible Embeddings">
+
+<p>Use this for calling <a href="https://github.com/xorbitsai/inference">/embedding endpoints on OpenAI Compatible Servers</a>.</p>
+
+**Note add `openai/` prefix to `linten_params`: `model` so linten knows to route to OpenAI**
+
+```yaml
+model_list:
+- model_name: text-embedding-ada-002  # model group
+  linten_params:
+    model: openai/<your-model-name>   # model name for linten.embedding(model=text-embedding-ada-002) 
+    api_base: <model-api-base>
+```
+
+</TabItem>
+</Tabs>
+
+#### Start Proxy
+
+```shell
+linten --config config.yaml
+```
+
+#### Make Request
+Sends Request to `bedrock-cohere`
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --data ' {
+  "model": "bedrock-cohere",
+  "messages": [
+      {
+      "role": "user",
+      "content": "gm"
+      }
+  ]
+}'
+```
+
+
+### Multiple OpenAI Organizations 
+
+Add all openai models across all OpenAI organizations with just 1 model definition 
+
+```yaml
+  - model_name: "*"
+    linten_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+      organization:
+       - org-1 
+       - org-2 
+       - org-3
+```
+
+Linten will automatically create separate deployments for each org.
+
+Confirm this via 
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/model/info' \
+--header 'Authorization: Bearer ${LINTEN_KEY}' \
+--data ''
+```
+
+### Load Balancing 
+
+:::info
+For more on this, go to [this page](https://docs.linten.ai/docs/proxy/load_balancing)
+:::
+
+Use this to call multiple instances of the same model and configure things like [routing strategy](https://docs.linten.ai/docs/routing#advanced).
+
+For optimal performance:
+- Set `tpm/rpm` per model deployment. Weighted picks are then based on the established tpm/rpm.
+- Select your optimal routing strategy in `router_settings:routing_strategy`.
+
+Linten supports
+```text
+["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"`
+```
+
+When `tpm/rpm` is set + `routing_strategy==simple-shuffle` linten will use a weighted pick based on set tpm/rpm. **In our load tests setting tpm/rpm for all deployments + `routing_strategy==simple-shuffle` maximized throughput**
+- When using multiple Linten Servers / Kubernetes set redis settings `router_settings:redis_host` etc
+
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+        rpm: 60      # Optional[int]: When rpm/tpm set - linten uses weighted pick for load balancing. rpm = Rate limit for this deployment: in requests per minute (rpm).
+        tpm: 1000   # Optional[int]: tpm = Tokens Per Minute 
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+        rpm: 600      
+  - model_name: zephyr-beta
+    linten_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+        rpm: 60000      
+  - model_name: {{openai_small}}
+    linten_params:
+        model: {{openai_small}}
+        api_key: <my-openai-key>
+        rpm: 200      
+  - model_name: {{openai_large}}
+    linten_params:
+        model: {{openai_large}}
+        api_key: <my-openai-key>
+        rpm: 100      
+
+linten_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets linten.request_timeout 
+  fallbacks: [{"zephyr-beta": ["{{openai_small}}"]}] # fallback to {{openai_small}} if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["{{openai_large}}"]}, {"{{openai_small}}": ["{{openai_large}}"]}] # fallback to {{openai_large}} if context window error
+
+router_settings: # router_settings are optional
+  allowed_fails: 3 # cooldown a deployment once it fails more than 3 calls within cooldown_time
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-5.6": "{{openai_small}}"} # all requests with `gpt-5.6` will be routed to models with `{{openai_small}}`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple linten proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
+```
+
+You can view your cost once you set up [Virtual keys](https://docs.linten.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.linten.ai/docs/proxy/logging)
+
+
+### Load API Keys / config values from Environment 
+
+If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. **This works for ANY value on the config.yaml**
+
+```yaml
+os.environ/<YOUR-ENV-VAR> # runs os.getenv("YOUR-ENV-VAR")
+```
+
+```yaml 
+model_list:
+  - model_name: gpt-4-team1
+    linten_params: # params for linten.completion() - https://docs.linten.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY # KEY CHANGE
+```
+
+[**See Code**](https://github.com/LintenAI/linten/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/linten/utils.py#L2366)
+
+s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
+
+### Centralized Credential Management
+
+Define credentials once and reuse them across multiple models. This helps with:
+- Secret rotation
+- Reducing config duplication
+
+```yaml
+model_list:
+  - model_name: {{openai_large}}
+    linten_params:
+      model: azure/{{openai_large}}
+      linten_credential_name: default_azure_credential  # Reference credential below
+
+credential_list:
+  - credential_name: default_azure_credential
+    credential_values:
+      api_key: os.environ/AZURE_API_KEY  # Load from environment
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2023-05-15"
+    credential_info:
+      description: "Production credentials for EU region"
+      custom_llm_provider: "azure"
+```
+
+#### Key Parameters
+- `credential_name`: Unique identifier for the credential set
+- `credential_values`: Key-value pairs of credentials/secrets (supports `os.environ/` syntax)
+- `credential_info`: Key-value pairs of user provided credentials information.  No key-value pairs are required, but the dictionary must exist.
+
+#### Credential names are permanent
+
+Models and vector stores reference a credential by `credential_name`, so it can't change after creation. A `PATCH` with a different `credential_name` returns 400
+
+To relabel a credential in the Admin UI, set `display_name` instead. It is optional, doesn't need to be unique, and is capped at 255 characters. On a `PATCH`, omit it to keep the current label or send `null` to clear it:
+
+```bash
+curl -X PATCH http://localhost:4000/credentials/default_azure_credential \
+  -H "Authorization: Bearer $LINTEN_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "Azure EU (prod)", "credential_info": {}}'
+```
+
+Credentials in `credential_list` can only be changed in `config.yaml`. `PATCH` and `DELETE` on them return 405, the UI disables Edit and Delete, and a `display_name` set there is ignored. `GET /credentials` returns each credential's `display_name` and its `source`, either `db` or `config`
+
+### Load API Keys from Secret Managers (Azure Vault, etc)
+
+[**Using Secret Managers with Linten Proxy**](../secret)
+
+
+### Set Supported Environments for a model - `production`, `staging`, `development`
+
+Use this if you want to control which model is exposed on a specific linten environment
+
+Supported Environments:
+- `production`
+- `staging`
+- `development`
+
+1. Set `LINTEN_ENVIRONMENT="<environment>"` in your environment. Can be one of `production`, `staging` or `development`
+
+
+2. For each model set the list of supported environments in `model_info.supported_environments`
+```yaml
+model_list:
+ - model_name: {{openai_small}}
+   linten_params:
+     model: openai/{{openai_small}}
+     api_key: os.environ/OPENAI_API_KEY
+   model_info:
+     supported_environments: ["development", "production", "staging"]
+ - model_name: {{openai_large}}
+   linten_params:
+     model: openai/{{openai_large}}
+     api_key: os.environ/OPENAI_API_KEY
+   model_info:
+     supported_environments: ["production", "staging"]
+ - model_name: {{anthropic}}
+   linten_params:
+     model: anthropic/{{anthropic}}
+     api_key: os.environ/ANTHROPIC_API_KEY
+   model_info:
+     supported_environments: ["production"]
+```
+
+
+### Set Custom Prompt Templates
+
+Linten by default checks if a model has a [prompt template and applies it](../completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    linten_params: # actual params for linten.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: " "
+      eos_token: " "
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ linten --config /path/to/config.yaml
+``` 
+
+### Set custom tokenizer 
+
+If you're using the [`/utils/token_counter` endpoint](https://docs.linten.ai/api-reference/#/llm%20utils/token_counter_utils_token_counter_post), and want to set a custom huggingface tokenizer for a model, you can do so in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai-deepseek
+    linten_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["restricted-models"]
+      custom_tokenizer: 
+        identifier: deepseek-ai/DeepSeek-V3-Base
+        revision: main
+        auth_token: os.environ/HUGGINGFACE_API_KEY
+```
+
+**Spec**
+```
+custom_tokenizer: 
+  identifier: str # huggingface model identifier
+  revision: str # huggingface model revision (usually 'main')
+  auth_token: Optional[str] # huggingface auth token 
+```
+
+## General Settings `general_settings` (DB Connection, etc)
+
+### Configure DB Pool Limits + Connection Timeouts 
+
+```yaml
+general_settings: 
+  database_connection_pool_limit: 10 # sets connection pool per worker for prisma client to postgres db (default: 10, recommended: 10-20)
+  database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
+```
+
+**How to calculate the right value:**
+
+The connection limit is applied **per worker process**, not per instance. This means if you have multiple workers, each worker will create its own connection pool.
+
+**Formula:**
+```
+database_connection_pool_limit = MAX_DB_CONNECTIONS ÷ (number_of_instances × number_of_workers_per_instance)
+```
+
+**Example:**
+- Your database allows a maximum of **100 connections**
+- You're running **1 instance** of Linten
+- Each instance has **8 workers** (set via `--num_workers 8`)
+
+Calculation: `100 ÷ (1 × 8) = 12.5`
+
+Since you shouldn't use 12.5, round down to **10** to leave a safety buffer. This means:
+- Each of the 8 workers will have a connection pool limit of 10
+- Total maximum connections: 8 workers × 10 connections = 80 connections
+- This stays safely under your database's 100 connection limit
+
+### Cap Idle DB Connections + Pass Extra Prisma URL Params
+
+If you're seeing a large number of idle Prisma connections that never close, set `database_socket_timeout` so Prisma closes any connection that's been silent past the threshold. You can also bound how long Prisma waits to open a new connection with `database_connect_timeout`, and pass arbitrary extra query-string params through to Prisma via `database_extra_connection_params`.
+
+These map to the Prisma [PostgreSQL connection URL params](https://www.prisma.io/docs/orm/overview/databases/postgresql) of the same name (minus the `database_` prefix), and Linten appends them to both `DATABASE_URL` and `DIRECT_URL`.
+
+```yaml
+general_settings:
+  database_connection_pool_limit: 20
+  database_socket_timeout: 300   # close any connection idle/slow for >5 min
+  database_connect_timeout: 15   # fail fast if a new connection can't be established within 15s
+  database_extra_connection_params:
+    pgbouncer: "true"            # set if running behind PgBouncer
+    statement_cache_size: 0
+    sslmode: "require"
+```
+
+**Notes:**
+- `database_socket_timeout` is the main knob for capping idle DB connections from Linten.
+- `database_connect_timeout` and `database_socket_timeout` are omitted from the URL when unset, so Prisma's defaults apply.
+- `database_extra_connection_params` is an untyped passthrough: any key you set here **overrides** the Linten-set defaults for that key (e.g. you can override `pool_timeout` from this dict). Use it for `sslmode`, `pgbouncer`, `statement_cache_size`, or any other Prisma URL param.
+- To verify the database server certificate against a custom CA (e.g. AWS RDS), set `sslmode: "verify-full"` and `sslrootcert: "/certs/global-bundle.pem"` here or on the URL; Linten translates them into Prisma's `sslcert` + `sslaccept=strict`. See [Verify the database server certificate](./prod.md#verify-the-database-server-certificate-custom-ca-eg-aws-rds).
+
+### Bounding Statement and Lock Time
+
+`database_connect_timeout` and `database_socket_timeout` bound the *connection*. Neither bounds a statement that is already running, so a slow write can keep executing on the server long after the Prisma client has stopped waiting for it, holding its row locks the whole time. Later writes to the same rows queue behind those locks, and under sustained traffic that queue is what exhausts database sessions.
+
+Set the two Postgres-side bounds to cap it:
+
+```yaml
+general_settings:
+  database_statement_timeout: 60 # seconds; cancels any statement running longer than this
+  database_lock_timeout: 15      # seconds; fails a statement that waits this long for someone else's lock
+```
+
+Linten delivers both through the standard libpq `options` parameter on `DATABASE_URL` (`options=-c statement_timeout=60000 -c lock_timeout=15000`); Postgres has no Prisma URL parameter of its own for them. A cancelled statement surfaces to Linten as SQLSTATE `57014`, `canceling statement due to statement timeout`.
+
+**Notes:**
+- Both are **opt-in**. Leave them unset and nothing changes.
+- Keep `database_lock_timeout` well below `database_statement_timeout`, so a write blocked behind another transaction's lock fails fast instead of consuming the whole statement budget.
+- Neither is applied to `DIRECT_URL`, which Prisma uses for migrations. Migrations legitimately run long and are never cancelled by these settings.
+- Any `options` value you pinned on `DATABASE_URL` yourself is preserved, and a setting you pinned there wins over the configured one. `database_extra_connection_params` wins over both.
+- These are the same bounds you would set on the server or in an RDS parameter group. Setting them here scopes them to Linten's own connections instead of every client of that database.
+
+### Disable Server-Side Prepared Statements
+
+Set `database_disable_prepared_statements: true` to stop Prisma from reusing server-side prepared statements. It appends `pgbouncer=true` to the Prisma connection URL, so each query is prepared fresh instead of reusing a cached plan.
+
+```yaml
+general_settings:
+  database_disable_prepared_statements: true
+```
+
+Use this when:
+- Linten connects to Postgres through **PgBouncer in transaction pooling mode**, where reused prepared statements break because consecutive queries can land on different server connections.
+- You run **rolling deployments with schema migrations** and see `cached plan must not change result type` errors. The error fires when a migration changes the result type of a column referenced by a plan that a pooled connection still holds; with this flag on there is no reused plan to invalidate, so the migration is harmless.
+
+The tradeoff is that every query pays the prepare cost instead of amortizing it, which adds a small per-query overhead. An explicit `pgbouncer` key in `database_extra_connection_params` takes precedence over this flag.
+
+## Linten License Key (Enterprise)
+
+To enable [Linten Enterprise features](https://docs.linten.ai/docs/enterprise), set your license key as an environment variable:
+
+```bash
+export LINTEN_LICENSE="eyJ..."
+```
+
+Linten gives you the license key when you buy a Linten Enterprise license (see [Activate your license](../enterprise/activate.md)). Once set, Linten will automatically detect and activate enterprise features.
+
+You can also add it to your `.env` file:
+
+```env
+LINTEN_LICENSE="eyJ..."
+```
+
+## Extras
+
+
+### Disable Swagger UI 
+
+To disable the Swagger docs from the base url, set 
+
+```env
+NO_DOCS="True"
+```
+
+in your environment, and restart the proxy. 
+
+### Disable Redoc
+
+To disable the Redoc docs (defaults to `<your-proxy-url>/redoc`), set 
+
+```env
+NO_REDOC="True"
+```
+
+in your environment, and restart the proxy. 
+
+### Disable OpenAPI schema
+
+To disable the raw OpenAPI schema (defaults to `<your-proxy-url>/openapi.json`), set 
+
+```env
+NO_OPENAPI="True"
+```
+
+in your environment, and restart the proxy. 
+
+### Restrict all API documentation for production/air-gapped deployments
+
+Swagger, Redoc and the raw OpenAPI schema are three independent surfaces, each disabled by its own env var. To fully lock down a production or air-gapped deployment, set all three: 
+
+```env
+NO_DOCS="True"
+NO_REDOC="True"
+NO_OPENAPI="True"
+```
+
+Restart the proxy after setting these. `/redoc` and `/openapi.json` then 404 with no schema in the response, `/` returns only the plain `"Linten: RUNNING"` status string, and inference and management routes are unaffected.
+
+### Use CONFIG_FILE_PATH for proxy (Easier Azure container deployment)
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: {{openai_large}}
+    linten_params:
+      model: {{openai_large}}
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Store filepath as env var 
+
+```bash
+CONFIG_FILE_PATH="/path/to/config.yaml"
+```
+
+3. Start Proxy
+
+```bash
+$ linten 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+
+### Providing Linten config.yaml file as a s3, GCS Bucket Object/url
+
+Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
+
+Linten Proxy will read your config.yaml from an s3 Bucket or GCS Bucket 
+
+<Tabs>
+<TabItem value="gcs" label="GCS Bucket">
+
+Set the following .env vars 
+```shell
+LINTEN_CONFIG_BUCKET_TYPE = "gcs"                              # set this to "gcs"         
+LINTEN_CONFIG_BUCKET_NAME = "linten-proxy"                    # your bucket name on GCS
+LINTEN_CONFIG_BUCKET_OBJECT_KEY = "proxy_config.yaml"         # object key on GCS
+```
+
+Start linten proxy with these env vars - linten will read your config from GCS 
+
+```shell
+docker run --name linten-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LINTEN_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LINTEN_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -e LINTEN_CONFIG_BUCKET_TYPE="gcs" \
+   -p 4000:4000 \
+   docker.linten.ai/lintenai/linten:latest --detailed_debug
+```
+
+</TabItem>
+
+<TabItem value="s3" label="s3">
+
+Set the following .env vars 
+```shell
+LINTEN_CONFIG_BUCKET_NAME = "linten-proxy"                    # your bucket name on s3 
+LINTEN_CONFIG_BUCKET_OBJECT_KEY = "linten_proxy_config.yaml"  # object key on s3
+```
+
+Start linten proxy with these env vars - linten will read your config from s3 
+
+```shell
+docker run --name linten-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LINTEN_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LINTEN_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -p 4000:4000 \
+   docker.linten.ai/lintenai/linten:latest
+```
+</TabItem>
+</Tabs>

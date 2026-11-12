@@ -1,0 +1,209 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# /guardrails/apply_guardrail
+
+Use this endpoint to directly call a guardrail configured on your Linten instance. This is useful when you have services that need to directly call a guardrail.
+
+## Supported Guardrail Types
+
+This endpoint supports various guardrail types including:
+- **Presidio** - PII detection and masking
+- **Bedrock** - AWS Bedrock guardrails for content moderation
+- **Lakera** - AI safety guardrails
+- **PANW Prisma AIRS** - Threat detection, DLP, and policy enforcement
+- **Custom guardrails** - User-defined guardrails
+
+## Configuration
+
+### Bedrock Guardrail Configuration
+
+To use Bedrock guardrails with the apply_guardrail endpoint, configure your guardrail in your Linten config.yaml:
+
+```yaml
+guardrails:
+  - guardrail_name: "bedrock-content-guard"
+    linten_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: "your-guardrail-id"  # Your actual Bedrock guardrail ID
+      guardrailVersion: "DRAFT"  # or your version number
+      aws_region_name: "us-east-1"  # Your AWS region
+      aws_role_name: "your-role-arn"  # Your AWS role with Bedrock permissions
+      default_on: true
+```
+
+**Required AWS Setup:**
+1. Create a Bedrock guardrail in AWS Console
+2. Get the guardrail ID and version
+3. Ensure your AWS credentials have Bedrock permissions
+4. Configure the guardrail in your Linten config 
+
+
+## Usage
+
+### Python SDK
+
+The source implementation in [SDK PR #49469](https://github.com/LintenAI/linten/pull/49469), stacked on [endpoint PR #49460](https://github.com/LintenAI/linten/pull/49460) for [issue #49217](https://github.com/LintenAI/linten/issues/49217), adds `linten.guardrails.apply`. Use a checkout containing both changes for the SDK and gateway until release.
+
+Configure the connection once, then call your configured guardrail:
+
+```python
+import os
+import linten
+
+linten.api_base = os.environ["LINTEN_API_BASE"]
+linten.api_key = os.environ["LINTEN_API_KEY"]
+
+verdict = await linten.guardrails.apply(
+    "answer-grounding",
+    response=answer,
+    messages=source_messages,
+)
+```
+
+Pass `response=` to check generated output or `input=` to check user input. Supply exactly one. The SDK infers `input_type` and requests native structured findings. `messages` supplies context for checks such as grounding; omit it for checks that do not need context. You can override `api_base`, `api_key`, or `timeout` on an individual call.
+
+The result follows the configured guardrail's schema, after the existing reporting sanitization removes sensitive fields. A guardrail must report structured findings through `add_standard_logging_guardrail_information_to_request_data`; the SDK does not create a verdict for guardrails that report none. For a runnable agent, custom guardrail, and chat UI, see [the grounding tutorial](/blog/grounded-agent).
+---
+
+<Tabs>
+<TabItem value="presidio" label="Presidio PII Guardrail" default>
+
+In this example `mask_pii` is a Presidio guardrail configured on Linten.
+
+```bash showLineNumbers title="Example calling the endpoint"
+curl -X POST 'http://localhost:4000/guardrails/apply_guardrail' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer ${LINTEN_API_KEY}" \
+-d '{
+    "guardrail_name": "mask_pii",
+    "text": "My name is John Doe and my email is john@example.com",
+    "language": "en",
+    "entities": ["NAME", "EMAIL"]
+}'
+```
+
+</TabItem>
+<TabItem value="bedrock" label="Bedrock Guardrail">
+
+In this example `bedrock-content-guard` is a Bedrock guardrail configured on Linten.
+
+```bash showLineNumbers title="Example calling the endpoint"
+curl -X POST 'http://localhost:4000/guardrails/apply_guardrail' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer ${LINTEN_API_KEY}" \
+-d '{
+    "guardrail_name": "bedrock-content-guard",
+    "text": "This is potentially harmful content that should be blocked",
+    "language": "en"
+}'
+```
+
+**Note**: For Bedrock guardrails, the `entities` parameter is not used as Bedrock handles content moderation based on its own policies.
+
+</TabItem>
+<TabItem value="custom" label="Custom Guardrail with metadata">
+
+Parameterized custom guardrails read per-request configuration from `request_data["metadata"]`. Send optional `metadata` in the request body and it is forwarded to your guardrail's `apply_guardrail` method. In this example `my-topic-guardrail` is a custom guardrail that blocks text mentioning any of the `forbidden_topics` passed in `metadata`.
+
+```bash showLineNumbers title="Example calling the endpoint"
+curl -X POST 'http://localhost:4000/guardrails/apply_guardrail' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer ${LINTEN_API_KEY}" \
+-d '{
+    "guardrail_name": "my-topic-guardrail",
+    "text": "What are tax loopholes?",
+    "metadata": {
+        "forbidden_topics": ["tax", "finance"]
+    }
+}'
+```
+
+`metadata` is only forwarded when the client sends it, so guardrails that do not depend on per-request configuration keep working unchanged when it is omitted.
+
+</TabItem>
+</Tabs>
+
+## Testing from the Admin UI
+---
+
+The Guardrail Testing Playground (`Guardrails` -> `Test Playground` in the Admin UI) has an optional **Metadata** field below the input text. Enter a JSON object and it is sent as the `metadata` field of the request, letting you exercise parameterized custom guardrails without leaving the dashboard. Invalid JSON is rejected inline before the request is sent.
+
+## Request Format
+---
+
+The request body should follow the ApplyGuardrailRequest format.
+
+#### Example Request Body
+
+```json
+{
+    "guardrail_name": "mask_pii",
+    "text": "My name is John Doe and my email is john@example.com",
+    "language": "en",
+    "entities": ["NAME", "EMAIL"]
+}
+```
+
+#### Required Fields
+- **guardrail_name** (string):  
+  The identifier for the guardrail to apply (e.g., "mask_pii").
+- **text** (string):  
+  The input text to process through the guardrail.
+
+#### Optional Fields
+- **language** (string):  
+  The language of the input text (e.g., "en" for English).
+- **entities** (array of strings):  
+  Specific entities to process or filter (e.g., ["NAME", "EMAIL"]).
+- **metadata** (object):  
+  Per-request configuration forwarded to the guardrail as `request_data["metadata"]`. Custom guardrails that override `apply_guardrail` are responsible for reading it. Forwarded only when present, so omitting it preserves existing behavior.
+
+The REST API also accepts `input_type` (`request` or `response`) and `response_format` (`standard` or `native`). The SDK derives the direction from `input=` or `response=` and selects `native`.
+
+## Response Format
+---
+
+The response will contain the processed text after applying the guardrail.
+
+With `response_format: "native"`, the response instead contains the sanitized structured findings reported by the guardrail. A single finding returns its object or array; multiple reported findings return an array. Field names depend on the guardrail. If it reports no structured findings, the endpoint returns HTTP 422 instead of a fabricated pass. Existing block and provider-error behavior still applies.
+
+#### Example Response
+
+<Tabs>
+<TabItem value="presidio" label="Presidio Response" default>
+
+```json
+{
+    "response_text": "My name is [REDACTED] and my email is [REDACTED]"
+}
+```
+
+</TabItem>
+<TabItem value="bedrock" label="Bedrock Response">
+
+```json
+{
+    "response_text": "This is potentially harmful content that should be blocked"
+}
+```
+
+**Note**: If Bedrock guardrail blocks the content, the endpoint will return an error with the blocking reason.
+
+</TabItem>
+</Tabs>
+
+#### Response Fields
+- **response_text** (string):  
+  The text after applying the guardrail.
+
+#### Error Responses
+
+If a guardrail blocks content (e.g., Bedrock guardrail), the endpoint will return an error:
+
+```json
+{
+    "detail": "Content blocked by Bedrock guardrail: Content violates policy"
+}
+```

@@ -1,0 +1,2877 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Gemini - Google AI Studio
+
+| Property | Details |
+|-------|-------|
+| Description | Google AI Studio is a fully-managed AI development platform for building and using generative AI. |
+| Provider Route on Linten | `gemini/` |
+| Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
+| API Endpoint for Provider | https://generativelanguage.googleapis.com |
+| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions`, [`/videos`](./gemini/videos.md), [`/images/edits`](../image_edits.md) |
+| Lyria (music) | [Cost map & notes](./gemini/music.md) |
+| Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
+
+<br />
+
+:::tip[Gemini API vs Vertex AI]
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix.
+
+Models without a prefix default to Vertex AI which requires full GCP authentication.
+:::
+
+## API Keys
+
+```python
+import os
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+```
+
+## Sample Usage
+```python
+from linten import completion
+import os
+
+os.environ['GEMINI_API_KEY'] = ""
+response = completion(
+    model="gemini/{{gemini_flash}}", 
+    messages=[{"role": "user", "content": "write code for saying hi from Linten"}]
+)
+```
+
+## Decisions {#decisions}
+
+Gemini Decision 1 answers yes/no, choice and rubric score questions through Linten's [`/v1/decisions` and `/v1/systemone`](../decisions.md) routes. This provider is on main through [Linten #51220](https://github.com/LintenAI/linten/pull/51220), not yet in a release
+
+Set `GEMINI_API_KEY` in the proxy environment and add this deployment to `config.yaml`
+
+```yaml showLineNumbers
+model_list:
+  - model_name: gemini/gemini-decision-1
+    linten_params:
+      model: gemini/gemini-decision-1
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+Call the proxy with an OpenAI Decisions body
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/v1/decisions' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+  "model": "gemini/gemini-decision-1",
+  "input": "The mug arrived cracked.",
+  "questions": [
+    {"type": "predicate", "name": "damaged", "instructions": "Is the mug damaged?"},
+    {
+      "type": "choice",
+      "name": "action",
+      "instructions": "Choose the next action",
+      "choices": [{"value": "replace", "description": "Broken item"}, {"value": "keep", "description": "Undamaged item"}]
+    },
+    {
+      "type": "score",
+      "name": "severity",
+      "instructions": "Rate the damage",
+      "levels": [{"label": "None"}, {"label": "Severe"}]
+    }
+  ]
+}'
+```
+
+Linten sends the request to Google's [Decisions API](https://aistudio.google.com/docs/decisions-api) at `/v1beta/decisions` with `x-goog-api-key` authentication. Both Linten routes use the same deployment, with answers in the format of the route you call. Usage reports input tokens and zero output tokens for cost tracking
+
+Text, images and inline audio/video are supported. Each request accepts up to 16 images and 20 MiB of decoded image data in total, including remote images downloaded by Linten. Message inputs preserve text and image order. Box questions return 400. PDFs and remote audio/video URLs are not mapped by Linten's Decisions input schema
+
+Per-request `api_base` or `base_url` overrides require an explicit `api_key` in the same request or return 400, even when the deployment has a key. Configure custom deployment URLs with their own key to avoid sending shared Google credentials to another host
+
+## Supported OpenAI Params
+- temperature
+- top_p
+- max_tokens
+- max_completion_tokens
+- stream
+- tools
+- tool_choice
+- include_server_side_tool_invocations
+- functions
+- response_format
+- n
+- stop
+- logprobs
+- frequency_penalty
+- modalities
+- reasoning_content
+- audio (for TTS models only)
+- service_tier
+
+**Anthropic Params**
+- thinking (used to set max budget tokens across anthropic/gemini models)
+
+[**See Updated List**](https://github.com/LintenAI/linten/blob/main/linten/llms/gemini/chat/transformation.py#L70)
+
+## Usage - Thinking / `reasoning_content`
+
+Linten translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/LintenAI/linten/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/linten/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
+
+**Cost Optimization:** Use `reasoning_effort="none"` (OpenAI standard) for significant cost savings - up to 96% cheaper. [Google's docs](https://ai.google.dev/gemini-api/docs/openai)
+
+:::info
+Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
+:::
+
+:::tip[Gemini 3 Models]
+For **Gemini 3+ models** (e.g., `{{gemini_pro}}`), Linten maps `reasoning_effort` to the `thinking_level` field instead of `thinking_budget` when you set it. Supported levels depend on the model: Flash-family models also support `medium`, and `minimal` up to 3.6 Flash. 3.7 and 3.8 Flash reject `minimal`, so Linten sends `low` for `minimal`, `none` and `disable` on them, driven by `supports_minimal_reasoning_effort: false` on their cost-map entries. If you omit `reasoning_effort`, Linten does **not** send a default `thinking_level`, so the request uses the **Gemini API defaults** (Gemini 3 Flash defaults to `high` on the API).
+:::
+
+:::warning[Image Models]
+**Gemini image models** (e.g., `gemini-3-pro-image-preview`, `gemini-2.0-flash-exp-image-generation`) do **not** support the `thinking_level` parameter. Linten automatically excludes image models from receiving thinking configuration to prevent API errors.
+:::
+
+**Mapping for Gemini 2.5 and earlier models**
+
+| reasoning_effort | thinking | Notes |
+| ---------------- | -------- | ----- |
+| "none"           | "budget_tokens": 0, "includeThoughts": false | **Recommended for cost optimization** - OpenAI-compatible, always 0 |
+| "disable"        | "budget_tokens": DEFAULT (0), "includeThoughts": false | Linten-specific, configurable via env var |
+| "low"            | "budget_tokens": 1024 | |
+| "medium"         | "budget_tokens": 2048 | |
+| "high"           | "budget_tokens": 4096 | |
+
+**Mapping for Gemini 3+ models**
+
+| reasoning_effort | thinking_level | Notes |
+| ---------------- | -------------- | ----- |
+| "minimal"        | `"minimal"` (Flash up to 3.6 / some 3.1) or `"low"` | Flash-family IDs use `minimal` unless their cost-map entry sets `supports_minimal_reasoning_effort: false` (3.7 and 3.8 Flash), which maps to `low` |
+| "low"            | "low" | Best for simple instruction following or chat |
+| "medium"         | `"medium"` or `"high"` | `"medium"` where the API supports it; otherwise `"high"` |
+| "high"           | "high" | Maximizes reasoning depth |
+| "disable"        | `"minimal"` (Flash up to 3.6) or `"low"` | Cannot fully disable thinking in Gemini 3; 3.7 and 3.8 Flash reject `minimal`, so they get `low` |
+| "none"           | `"minimal"` (Flash up to 3.6) or `"low"` | Cannot fully disable thinking in Gemini 3; 3.7 and 3.8 Flash reject `minimal`, so they get `low` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+
+# Cost-optimized: Use reasoning_effort="none" for best pricing
+resp = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="none",  # Up to 96% cheaper!
+)
+
+# Or use other levels: "low", "medium", "high"
+resp = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: {{gemini_flash}}
+  linten_params:
+    model: gemini/{{gemini_flash}}
+    api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LINTEN-KEY>" \
+  -d '{
+    "model": "{{gemini_flash}}",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Gemini 3+ Models - `thinking_level` Parameter
+
+For Gemini 3+ models (e.g., `{{gemini_pro}}`), you can use the new `thinking_level` parameter directly:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+
+# Use thinking_level for Gemini 3 models
+resp = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=[{"role": "user", "content": "Solve this complex math problem step by step."}],
+    reasoning_effort="high",  # Options: "low" or "high"
+)
+
+# Low thinking level for faster, simpler tasks
+resp = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=[{"role": "user", "content": "What is the weather today?"}],
+    reasoning_effort="low",  # Minimizes latency and cost
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LINTEN-KEY>" \
+  -d '{
+    "model": "{{gemini_pro}}",
+    "messages": [{"role": "user", "content": "Solve this complex problem."}],
+    "reasoning_effort": "high"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::warning
+**Temperature Recommendation for Gemini 3 Models**
+
+Leave `temperature` unset for Gemini 3 models. Linten forwards only the sampling parameters you set, so an omitted `temperature` lets Google apply its own default of `1.0`. Setting `temperature < 1.0` can cause:
+- Infinite loops
+- Degraded reasoning performance
+- Failure on complex tasks
+
+An explicit `temperature`, including `1.0` pinned in `linten_params`, is still forwarded as given. Remove it if you want Linten to stop sending the parameter.
+:::
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='{{gemini_flash}}',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+            ),
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
+### Pass `thinking` to Gemini models
+
+You can also pass the `thinking` parameter to Gemini models.
+
+This is translated to Gemini's [`thinkingConfig` parameter](https://ai.google.dev/gemini-api/docs/thinking#set-budget).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = linten.completion(
+  model="gemini/{{gemini_flash}}",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_KEY" \
+  -d '{
+    "model": "gemini/{{gemini_flash}}",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+For **Gemini 3+ models**, Linten now follows provider defaults by default and does **not** force `thinkingLevel` when you pass Anthropic-style `thinking={"type":"enabled","budget_tokens":...}`.
+
+If you want the legacy Linten behavior (force `thinkingLevel="low"` for Pro and `thinkingLevel="minimal"` for Flash), enable:
+
+```python
+import linten
+
+linten.enable_gemini_default_thinking_level_low = True
+```
+
+### Thinking without thought summaries
+
+<SinceVersion v="1.107.0" />
+
+Gemini returns a summary of its thinking in `reasoning_content` whenever thinking is on. To keep the thinking but drop the summary text on every Gemini request, turn the summaries off.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import linten
+
+linten.gemini_include_thoughts_default = False
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+linten_settings:
+  gemini_include_thoughts_default: false
+```
+
+</TabItem>
+</Tabs>
+
+The model still thinks and `usage.completion_tokens_details.reasoning_tokens` is still billed, but the response carries no thought text. A request that asks for the summary still gets it:
+
+- `/v1/chat/completions`: `reasoning_effort={"effort": "medium", "summary": "auto"}`, the AI SDK `reasoning_summary` (or `reasoningSummary`) next to `reasoning_effort`, or `thinking` with a `summary` string or any `display` other than `"omitted"`.
+- `/v1/messages`: `thinking` with a `summary` string or any `display` other than `"omitted"`, such as `"summarized"`.
+- `/v1/responses`: `reasoning={"effort": "medium", "summary": "auto"}`.
+
+`"display": "omitted"` is not an ask, so the setting decides. On `/v1/messages` this setting also wins over `reasoning_auto_summary`, since that summary is added by the gateway, not asked for by the request. A text value such as `"false"` is read as `false`, and a value that reads as neither keeps the summaries on.
+
+## Usage - `service_tier`
+
+Linten propagates OpenAI's `service_tier` parameter to Gemini, and also extracts it from the response headers (`x-gemini-service-tier`) into `model_response.service_tier`.
+
+| OpenAI `service_tier` | Gemini `service_tier` | Notes |
+| --------------------- | --------------------- | ----- |
+| `"auto"`              | `"priority"`          | Linten maps OpenAI's `"auto"` to Gemini's `"priority"` tier, as `priority` will fall back on Gemini. |
+| `"flex"`              | `"flex"`              | Direct mapping. |
+| `"priority"`          | `"priority"`          | Direct mapping. |
+| `"default"`           | `"standard"`          | Linten maps `"default"` to `"standard"`. |
+| Any other value       | Passed as-is (lowercased) | Values are case-insensitive and normalized to lowercase. |
+
+On the response, Linten maps `"standard"` back to `"default"` for the Gemini API.
+
+
+## Long outputs
+
+On a model that ends a request with a `continuationToken`, such as Gemini 4 Argon, Linten sends the request again with that token until the answer finishes or `max_tokens` is spent, so `max_tokens` can go above Google's per-request cap. [Long outputs](/blog/gemini-4-argon#long-outputs) covers how it works, the usage it reports and the timeouts it needs.
+
+A request that sends no output limit is sent once and stops at Google's own per-request limit. From v1.108.0, set the env var `LINTEN_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS` to an integer to give those requests a budget. It applies to chat completion, text completion and Responses API requests through the proxy or the Python SDK, and never to `/v1/messages`, which requires `max_tokens`. Linten caps the budget at the model's `max_output_tokens` in the cost map, and any output limit the request already carries wins. It is not applied to a model the cost map does not list as a chat model, such as an image model, to a model whose cost map `supported_output_modalities` leaves out text, such as a Lyria music model, to a request whose `modalities` asks for anything besides text, to a request that resumes with a `continuation_token`, or to the native `:generateContent` route. A large value makes a non-streamed request run as long as the answer, so stream long answers or raise the client's timeout. The [env var reference](/docs/proxy/config_settings#environment-variables---reference) lists every case.
+
+`supports_continuation: true` in the cost map marks a model that can end a request with a `continuationToken` <SinceVersion v="1.110.0" />. It is set on `gemini/gemini-4-argon`, `vertex_ai/gemini-4-argon` and `vertex_ai/gemini-4-argon-cyber-permissive`. Read it before sending a request with `linten.supports_continuation("gemini/gemini-4-argon")` or `linten.get_model_info("gemini/gemini-4-argon")["supports_continuation"]`, or through the proxy at `GET /model/info` and `GET /v1/model/info`, where each deployment carries it in `model_info`, and at `GET /model_group/info`, where a model group reports `true` when any of its deployments supports it. `get_model_info` and `/model/info` return `None` (`null`) for a model the cost map leaves unflagged, so check for `true` instead of `false`. A deployment's own `model_info` in `config.yaml` or the Admin UI overrides the cost map value for that deployment only, so set `supports_continuation: true` there for a model the cost map does not flag yet. The flag only says what the model can do and does not turn continuation on or off. Linten sends the request again only when it has an output limit, from `max_tokens` or `LINTEN_GEMINI_DEFAULT_MAX_OUTPUT_TOKENS`, and asks for one choice (`n` of 1), whatever the flag says. Whether a given answer was cut short still comes from the response. On `/chat/completions` that answer ends with `finish_reason: "length"` and carries `provider_specific_fields.continuation_token`, and [Long outputs](/blog/gemini-4-argon#long-outputs) shows how to send it back to continue the answer.
+
+## Text-to-Speech (TTS) Audio Output
+
+:::info
+
+Linten supports Gemini TTS models that can generate audio responses using the OpenAI-compatible `audio` parameter format.
+
+:::
+
+### Supported Models
+
+Linten supports Gemini TTS models with audio capabilities (e.g. `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+### Limitations
+
+:::warning
+
+**Important Limitations**:
+- Gemini TTS models only support the `pcm16` audio format
+- **Streaming support has not been added** to TTS models yet
+- The `modalities` parameter must be set to `['audio']` for TTS requests
+
+:::
+
+### Voice names
+
+`audio.voice` takes any Gemini prebuilt voice name (`Kore`, `Puck`, `Zephyr`, ...) and sends it through unchanged. OpenAI voice names map to the nearest Gemini prebuilt voice, so OpenAI-shaped clients and the proxy's default `audio_speech` health check (`alloy`) work without a config change. The lookup is case-insensitive, and any other name is sent through as-is, so a typo still fails at Google with its `No matching speaker voice found` error.
+
+The mapping works <SinceVersion v="1.107.0" />, first in `v1.107.0-rc.1`. Earlier releases send OpenAI voice names to Google unchanged, and Google rejects them, so set a Gemini voice name such as `Kore` there.
+
+| OpenAI voice | Gemini voice |
+|--------------|--------------|
+| `alloy` | `Kore` |
+| `ash` | `Iapetus` |
+| `ballad` | `Algieba` |
+| `cedar` | `Achird` |
+| `coral` | `Sulafat` |
+| `echo` | `Charon` |
+| `fable` | `Umbriel` |
+| `marin` | `Despina` |
+| `onyx` | `Orus` |
+| `sage` | `Vindemiatrix` |
+| `shimmer` | `Achernar` |
+| `verse` | `Puck` |
+
+Gemini voice names and their characters come from the [Gemini speech generation docs](https://ai.google.dev/gemini-api/docs/speech-generation) (read 2026-10-07).
+
+`nova` is not in the table: Gemini 3.x TTS models accept it as a voice name of their own (checked live on 2026-10-08), so it is sent through unchanged. `gemini-2.5-flash-preview-tts` rejects `nova`, so use a Gemini voice name there.
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ['GEMINI_API_KEY'] = "your-api-key"
+
+response = completion(
+    model="gemini/gemini-2.5-flash-preview-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],  # Required for TTS models
+    audio={
+        "voice": "Kore",
+        "format": "pcm16"  # Required: must be "pcm16"
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-tts-flash
+    linten_params:
+      model: gemini/gemini-2.5-flash-preview-tts
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-tts-pro
+    linten_params:
+      model: gemini/gemini-2.5-pro-preview-tts
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Make TTS request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LINTEN-KEY>" \
+  -d '{
+    "model": "gemini-tts-flash",
+    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
+    "modalities": ["audio"],
+    "audio": {
+      "voice": "Kore",
+      "format": "pcm16"
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Advanced Usage
+
+You can combine TTS with other Gemini features:
+
+```python
+response = completion(
+    model="gemini/gemini-2.5-pro-preview-tts",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
+        {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    modalities=["audio"],
+    audio={
+        "voice": "Charon",
+        "format": "pcm16"
+    },
+    temperature=0.7,
+    max_tokens=150
+)
+```
+
+For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+## Audio Transcription (Speech-to-Text)
+
+:::info
+
+Linten supports `gemini-3.5-transcribe` on `/v1/audio/transcriptions` and `gemini-3.5-transcribe-live` on `/v1/realtime`. Using Vertex AI instead of an API key? See [Vertex AI Audio Transcription](./vertex_transcription.md).
+
+:::
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import transcription
+import os
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+audio_file = open("speech.wav", "rb")
+response = transcription(
+    model="gemini/gemini-3.5-transcribe",
+    file=audio_file,
+    response_format="verbose_json",
+    timestamp_granularities=["word"],
+)
+print(response.text)
+print(response.words)  # word-level timestamps
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add the model to your config
+
+```yaml
+model_list:
+  - model_name: gemini-3.5-transcribe
+    linten_params:
+      model: gemini/gemini-3.5-transcribe
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+linten --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/transcriptions \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -F file=@speech.wav \
+  -F model=gemini-3.5-transcribe \
+  -F response_format=verbose_json \
+  -F "timestamp_granularities[]=word"
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Params
+
+`language`, `response_format`, and `timestamp_granularities` are supported. Requesting word timestamps also enables speaker diarization on the underlying Interactions API call. The `srt` and `vtt` response formats are synthesized by Linten from Gemini's word timestamps, so `text` holds the subtitle document; when Gemini returns no timestamps, `text` falls back to the plain transcript.
+
+### Live Transcription over `/v1/realtime`
+
+`gemini-3.5-transcribe-live` runs over the Realtime websocket. Stream `pcm16` audio with `input_audio_buffer.append` and read transcripts from `conversation.item.input_audio_transcription.completed` events. The Gemini Live API reports no token usage for transcription sessions, so Linten estimates usage (and spend) from the streamed audio duration using Google's published estimator rates.
+
+```python
+import asyncio
+import json
+import websockets
+
+async def main():
+    async with websockets.connect(
+        "ws://0.0.0.0:4000/v1/realtime?model=gemini-3.5-transcribe-live",
+        additional_headers={"Authorization": "Bearer sk-<your-linten-api-key>"},
+    ) as ws:
+        await ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": "<base64 pcm16 audio>"}))
+        async for message in ws:
+            event = json.loads(message)
+            if event.get("type") == "conversation.item.input_audio_transcription.completed":
+                print(event["transcript"], event.get("usage"))
+
+asyncio.run(main())
+```
+
+## Passing Gemini Specific Params
+### Response schema 
+Linten supports sending `response_schema` as a param for Gemini models on Google AI Studio (e.g. `{{gemini_pro}}`). 
+
+**Response Schema**
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion 
+import json 
+import os 
+
+os.environ['GEMINI_API_KEY'] = ""
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }
+
+
+completion(
+    model="gemini/{{gemini_pro}}", 
+    messages=messages, 
+    response_format={"type": "json_object", "response_schema": response_schema} # KEY CHANGE
+    )
+
+print(json.loads(completion.choices[0].message.content))
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy 
+
+```
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_pro}}",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }}
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+**Validate Schema**
+
+To validate the response_schema, set `enforce_validation: true`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion, JSONSchemaValidationError
+try: 
+	completion(
+    model="gemini/{{gemini_pro}}", 
+    messages=messages, 
+    response_format={
+        "type": "json_object", 
+        "response_schema": response_schema,
+        "enforce_validation": true # KEY CHANGE
+    }
+	)
+except JSONSchemaValidationError as e: 
+	print("Raw Response: {}".format(e.raw_response))
+	raise e
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy 
+
+```
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_pro}}",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }, 
+    "enforce_validation": true
+    }
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+Linten will validate the response against the schema, and raise a `JSONSchemaValidationError` if the response does not match the schema. 
+
+JSONSchemaValidationError inherits from `openai.APIError` 
+
+Access the raw response with `e.raw_response`
+
+
+
+### GenerationConfig Params 
+
+To pass additional GenerationConfig params - e.g. `topK`, just pass it in the request body of the call, and Linten will pass it straight through as a key-value pair in the request body. 
+
+[**See Gemini GenerationConfigParams**](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion 
+import json 
+import os 
+
+os.environ['GEMINI_API_KEY'] = ""
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+completion(
+    model="gemini/{{gemini_pro}}", 
+    messages=messages, 
+    topK=1 # KEY CHANGE
+)
+
+print(json.loads(completion.choices[0].message.content))
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy 
+
+```
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_pro}}",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "topK": 1 # KEY CHANGE
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+**Validate Schema**
+
+To validate the response_schema, set `enforce_validation: true`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion, JSONSchemaValidationError
+try: 
+	completion(
+    model="gemini/{{gemini_pro}}", 
+    messages=messages, 
+    response_format={
+        "type": "json_object", 
+        "response_schema": response_schema,
+        "enforce_validation": true # KEY CHANGE
+    }
+	)
+except JSONSchemaValidationError as e: 
+	print("Raw Response: {}".format(e.raw_response))
+	raise e
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy 
+
+```
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_pro}}",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }, 
+    "enforce_validation": true
+    }
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+## Specifying Safety Settings 
+In certain use-cases you may need to make calls to the models and pass [safety settings](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+
+```python
+response = completion(
+    model="gemini/{{gemini_flash}}", 
+    messages=[{"role": "user", "content": "write code for saying hi from Linten"}],
+    safety_settings=[
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+)
+```
+
+## Tool Calling 
+
+```python
+from linten import completion
+import os
+# set env
+os.environ["GEMINI_API_KEY"] = ".."
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=messages,
+    tools=tools,
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+
+```
+
+
+### Google Search Tool
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+tools = [{"googleSearch": {}}] # ADD GOOGLE SEARCH
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_flash}}",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"googleSearch": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+### Context Circulation (Server-Side Tool Combination)
+
+Context circulation allows Gemini 3+ models to combine **built-in tools** (like Google Search) with **your custom functions** in the same request. Without it, Gemini returns an error if you try to use both.
+
+When enabled, Gemini can execute Google Search server-side, use those results to decide whether to call your custom functions, and return the full chain of reasoning.
+
+**How it works:**
+1. You pass `include_server_side_tool_invocations=True` along with both Google Search and your function tools
+2. Gemini executes server-side tools internally and returns `toolCall`/`toolResponse` parts alongside any `functionCall` parts
+3. Linten extracts the server-side invocations into `provider_specific_fields["server_side_tool_invocations"]`
+4. On subsequent turns, include the full assistant message in your conversation history; Linten re-injects the server-side parts automatically
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting."}],
+    tools=[
+        {"type": "web_search_preview"},  # Google Search (server-side)
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_meeting",
+                "description": "Schedule a meeting",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                },
+            },
+        },
+    ],
+    include_server_side_tool_invocations=True,
+)
+
+msg = response.choices[0].message
+
+# Server-side tool results are in provider_specific_fields
+psf = msg.provider_specific_fields or {}
+for invocation in psf.get("server_side_tool_invocations", []):
+    print(invocation["tool_type"])  # e.g. "GOOGLE_SEARCH_WEB"
+    print(invocation["id"])
+    print(invocation["args"])       # e.g. {"queries": ["weather Buenos Aires"]}
+    print(invocation["response"])   # Search results from Google
+
+# For multi-turn: just append the full message to history
+messages.append(msg)
+messages.append({"role": "user", "content": "Thanks!"})
+# Linten automatically re-injects the server-side parts + thought signatures
+response2 = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=messages,
+    tools=tools,
+    include_server_side_tool_invocations=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_flash}}",
+  "messages": [{"role": "user", "content": "What is the weather in Buenos Aires?"}],
+  "tools": [
+    {"type": "web_search_preview"},
+    {"type": "function", "function": {"name": "schedule_meeting", "description": "Schedule a meeting", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}}
+  ],
+  "include_server_side_tool_invocations": true
+}'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+- Context circulation requires **Gemini 3+** models
+- Server-side tool invocations (`toolCall`/`toolResponse`) are **not** included in `tool_calls`. They are in `provider_specific_fields["server_side_tool_invocations"]` because they were already executed by Google, not by your code
+- `thought_signatures` are automatically preserved alongside server-side invocations for multi-turn coherence
+
+:::
+
+### URL Context
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+# ADD URL CONTEXT
+tools = [{"urlContext": {}}]
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    tools=tools,
+)
+
+print(response)
+
+# Access URL context metadata
+url_context_metadata = response.model_extra['vertex_ai_url_context_metadata']
+urlMetadata = url_context_metadata[0]['urlMetadata'][0]
+print(f"Retrieved URL: {urlMetadata['retrievedUrl']}")
+print(f"Retrieval Status: {urlMetadata['urlRetrievalStatus']}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LINTEN-KEY>" \
+  -d '{
+    "model": "{{gemini_flash}}",
+    "messages": [{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    "tools": [{"urlContext": {}}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### Google Search Retrieval
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+tools = [{"googleSearch": {}}] # ADD GOOGLE SEARCH
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_flash}}",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"googleSearch": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+### Code Execution Tool
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+tools = [{"codeExecution": {}}] # ADD GOOGLE SEARCH
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_flash}}",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+### Computer Use Tool
+
+<Tabs>
+<TabItem value="sdk" label="Linten Python SDK">
+
+```python
+from linten import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+# Computer Use tool with browser environment
+tools = [
+    {
+        "type": "computer_use",
+        "environment": "browser",  # optional: "browser" or "unspecified"
+        "excluded_predefined_functions": ["drag_and_drop"]  # optional
+    }
+]
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Navigate to google.com and search for 'Linten'"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,..."  # screenshot of current browser state
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/gemini-2.5-computer-use-preview-10-2025",
+    messages=messages,
+    tools=tools,
+)
+
+print(response)
+
+# Handling tool responses with screenshots
+# When the model makes a tool call, send the response back with a screenshot:
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    
+    # Add assistant message with tool call
+    messages.append(response.choices[0].message.model_dump())
+    
+    # Add tool response with screenshot
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com", "status": "completed"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,..."  # New screenshot after action (Can send an image url as well, linten handles the conversion)
+            }
+        ]
+    })
+    
+    # Continue conversation with updated screenshot
+    response = completion(
+        model="gemini/gemini-2.5-computer-use-preview-10-2025",
+        messages=messages,
+        tools=tools,
+    )
+```
+
+</TabItem>
+<TabItem value="proxy" label="Linten Proxy Server">
+
+1. Add model to config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-computer-use
+    linten_params:
+      model: gemini/gemini-2.5-computer-use-preview-10-2025
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "gemini-computer-use",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Click on the search button"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,..."
+            }
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "computer_use",
+        "environment": "browser"
+      }
+    ]
+  }'
+```
+
+**Tool Response Format:**
+
+When responding to Computer Use tool calls, include the URL and screenshot:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_abc123",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"url\": \"https://example.com\", \"status\": \"completed\"}"
+    },
+    {
+      "type": "input_image",
+      "image_url": "data:image/png;base64,..."
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Environment Mapping
+
+| Linten Input | Gemini API Value |
+|--------------|------------------|
+| `"browser"` | `ENVIRONMENT_BROWSER` |
+| `"unspecified"` | `ENVIRONMENT_UNSPECIFIED` |
+| `ENVIRONMENT_BROWSER` | `ENVIRONMENT_BROWSER` (passed through) |
+| `ENVIRONMENT_UNSPECIFIED` | `ENVIRONMENT_UNSPECIFIED` (passed through) |
+
+
+
+
+
+## Thought Signatures
+
+Thought signatures are encrypted representations of the model's internal reasoning process for a given turn in a conversation. By passing thought signatures back to the model in subsequent requests, you provide it with the context of its previous thoughts, allowing it to build upon its reasoning and maintain a coherent line of inquiry.
+
+Thought signatures are particularly important for multi-turn function calling scenarios where the model needs to maintain context across multiple tool invocations.
+
+### How Thought Signatures Work
+
+- **Function calls with signatures**: When Gemini returns a function call, it includes a `thought_signature` in the response
+- **Preservation**: Linten automatically extracts and stores thought signatures in `provider_specific_fields` of tool calls
+- **Return in conversation history**: When you include the assistant's message with tool calls in subsequent requests, Linten automatically preserves and returns the thought signatures to Gemini
+- **Parallel function calls**: Only the first function call in a parallel set has a thought signature
+- **Sequential function calls**: Each function call in a multi-step sequence has its own signature
+
+### Enabling Thought Signatures
+
+To enable thought signatures, you need to enable thinking/reasoning:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    tools=[...],
+    reasoning_effort="low",  # Enable thinking to get thought signatures
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "{{gemini_flash}}",
+    "messages": [{"role": "user", "content": "What'\''s the weather in Tokyo?"}],
+    "tools": [...],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Multi-Turn Function Calling with Thought Signatures
+
+When building conversation history for multi-turn function calling, you must include the thought signatures from previous responses. Linten handles this automatically when you append the full assistant message to your conversation history.
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Client">
+
+```python
+from openai import OpenAI
+import json
+
+client = OpenAI(api_key="sk-<your-linten-api-key>", base_url="http://localhost:4000")
+
+def get_current_temperature(location: str) -> dict:
+    """Gets the current weather temperature for a given location."""
+    return {"temperature": 30, "unit": "celsius"}
+
+def set_thermostat_temperature(temperature: int) -> dict:
+    """Sets the thermostat to a desired temperature."""
+    return {"status": "success"}
+
+get_weather_declaration = {
+    "name": "get_current_temperature",
+    "description": "Gets the current weather temperature for a given location.",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"],
+    },
+}
+
+set_thermostat_declaration = {
+    "name": "set_thermostat_temperature",
+    "description": "Sets the thermostat to a desired temperature.",
+    "parameters": {
+        "type": "object",
+        "properties": {"temperature": {"type": "integer"}},
+        "required": ["temperature"],
+    },
+}
+
+# Initial request
+messages = [
+    {"role": "user", "content": "If it's too hot or too cold in London, set the thermostat to a comfortable level."}
+]
+
+response = client.chat.completions.create(
+    model="{{gemini_flash}}",
+    messages=messages,
+    tools=[get_weather_declaration, set_thermostat_declaration],
+    reasoning_effort="low"
+)
+
+# Append the assistant's message (includes thought signatures automatically)
+messages.append(response.choices[0].message)
+
+# Execute tool calls and append results
+for tool_call in response.choices[0].message.tool_calls:
+    if tool_call.function.name == "get_current_temperature":
+        result = get_current_temperature(**json.loads(tool_call.function.arguments))
+        messages.append({
+            "role": "tool",
+            "content": json.dumps(result),
+            "tool_call_id": tool_call.id
+        })
+
+# Second request - thought signatures are automatically preserved
+response2 = client.chat.completions.create(
+    model="{{gemini_flash}}",
+    messages=messages,
+    tools=[get_weather_declaration, set_thermostat_declaration],
+    reasoning_effort="low"
+)
+
+print(response2.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash
+# Step 1: Initial request
+curl --location 'http://localhost:4000/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header "Authorization: Bearer $LINTEN_API_KEY" \
+  --data '{
+    "model": "{{gemini_flash}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": "If it'\''s too hot or too cold in London, set the thermostat to a comfortable level."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "description": "Gets the current weather temperature for a given location.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            },
+            "required": ["location"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "set_thermostat_temperature",
+          "description": "Sets the thermostat to a desired temperature.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "temperature": {"type": "integer"}
+            },
+            "required": ["temperature"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "reasoning_effort": "low"
+  }'
+```
+
+The response will include tool calls with thought signatures in `provider_specific_fields`:
+
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "tool_calls": [{
+        "id": "call_abc123",
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "arguments": "{\"location\": \"London\"}"
+        },
+        "index": 0,
+        "provider_specific_fields": {
+          "thought_signature": "CpcHAdHtim9+q4rstcbvQC0ic4x1/vqQlCJWgE+UZ6dTLYGHMMBkF/AxqL5UmP6SY46uYC8t4BTFiXG5zkw6EMJ...=="
+        }
+      }]
+    }
+  }]
+}
+```
+
+```bash
+# Step 2: Follow-up request with tool response
+# Include the assistant message from Step 1 (with thought signatures in provider_specific_fields)
+curl --location 'http://localhost:4000/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header "Authorization: Bearer $LINTEN_API_KEY" \
+  --data '{
+    "model": "{{gemini_flash}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": "If it'\''s too hot or too cold in London, set the thermostat to a comfortable level."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_c130b9f8c2c042e9b65e39a88245",
+            "type": "function",
+            "function": {
+              "name": "get_current_temperature",
+              "arguments": "{\"location\": \"London\"}"
+            },
+            "index": 0,
+            "provider_specific_fields": {
+              "thought_signature": "CpcHAdHtim9+q4rstcbvQC0ic4x1/vqQlCJWgE+UZ6dTLYGHMMBkF/AxqL5UmP6SY46uYC8t4BTFiXG5zkw6EMJ...=="
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "{\"temperature\": 30, \"unit\": \"celsius\"}",
+        "tool_call_id": "call_c130b9f8c2c042e9b65e39a88245"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "description": "Gets the current weather temperature for a given location.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            },
+            "required": ["location"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "set_thermostat_temperature",
+          "description": "Sets the thermostat to a desired temperature.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "temperature": {"type": "integer"}
+            },
+            "required": ["temperature"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+1. **Automatic Handling**: Linten automatically extracts thought signatures from Gemini responses and preserves them when you include assistant messages in conversation history. You don't need to manually extract or manage them.
+
+2. **Parallel Function Calls**: When the model makes parallel function calls, only the first function call will have a thought signature. Subsequent parallel calls won't have signatures.
+
+3. **Sequential Function Calls**: In multi-step function calling scenarios, each step's first function call will have its own thought signature that must be preserved.
+
+4. **Required for Context**: Thought signatures are essential for maintaining reasoning context across multi-turn conversations with function calling. Without them, the model may lose context of its previous reasoning.
+
+5. **Format**: Thought signatures are stored in `provider_specific_fields.thought_signature` of tool calls in the response, and are automatically included when you append the assistant message to your conversation history.
+
+6. **Chat Completions Clients**: With chat completions clients where you cannot control whether or not the previous assistant message is included as-is (ex langchain's ChatOpenAI), Linten also preserves the thought signature by appending it to the tool call id (`call_123__thought__<thought-signature>`) and extracting it back out before sending the outbound request to Gemini. For a client that limits the id length, see [Keep tool call ids short](#keep-tool-call-ids-short).
+
+### Keep tool call ids short
+
+By default, when a tool call carries a thought signature, the tool call id that Linten returns holds the whole signature, as `call_123__thought__<thought-signature>`. Gemini signs only the first call of a parallel batch, so the other ids are already short. A signature is often hundreds of characters long, so a client that limits the id length rejects the tool call. For example, the AWS Bedrock AgentCore harness allows at most 128 characters.
+
+Set `thought_signature_in_tool_call_id: false` <SinceVersion v="1.109.0" /> to get short ids such as `call_436686`. Linten then returns the signature only in `provider_specific_fields.thought_signature` of the tool call that carries it. The setting applies to Gemini models called through `gemini/` and `vertex_ai/` on `/chat/completions` and `/responses`, with and without streaming. When it is not set, ids hold the signature as before.
+
+Set it on a deployment in your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: {{gemini_flash}}
+    linten_params:
+      model: gemini/{{gemini_flash}}
+      api_key: os.environ/GEMINI_API_KEY
+      thought_signature_in_tool_call_id: false
+```
+
+Or set it per request. A value in the request takes precedence over the value on the deployment.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_temperature",
+            "description": "Gets the current weather temperature for a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+response = completion(
+    model="gemini/{{gemini_flash}}",
+    messages=[{"role": "user", "content": "What's the temperature in London?"}],
+    tools=tools,
+    reasoning_effort="low",
+    thought_signature_in_tool_call_id=False,
+)
+print(response.choices[0].message.tool_calls[0].id)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LINTEN_API_KEY" \
+  -d '{
+    "model": "{{gemini_flash}}",
+    "messages": [{"role": "user", "content": "What'\''s the temperature in London?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_current_temperature",
+        "description": "Gets the current weather temperature for a given location.",
+        "parameters": {
+          "type": "object",
+          "properties": {"location": {"type": "string"}},
+          "required": ["location"]
+        }
+      }
+    }],
+    "reasoning_effort": "low",
+    "thought_signature_in_tool_call_id": false
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+The value is a boolean. Linten also accepts a value that converts to a boolean, such as `"false"` or `0`. Any other value, such as `"maybe"`, gets an HTTP 400 error that names `thought_signature_in_tool_call_id`. With `drop_params: true`, Linten drops the bad value instead and uses the value on the deployment, or the default when the deployment does not set one.
+
+On the next turn, send back the assistant message with its tool calls as you received them, `provider_specific_fields` included. Linten reads the signature from `provider_specific_fields` and sends it to Gemini with the tool call. With the OpenAI client, `messages.append(response.choices[0].message)` does this, as in the [multi-turn example](#multi-turn-function-calling-with-thought-signatures) above. On `/responses`, each `function_call` output item carries the same `provider_specific_fields`, so send the item back unchanged in the next `input`. Linten reads those fields from an input item only when the setting is `false` for that request too, so if you set it per request, send it on every turn, or set it on the deployment instead.
+
+If your client sends back only the short id and drops `provider_specific_fields`, Linten has no signature to send. For Gemini 3 and newer models, it then puts a placeholder signature on the first tool call of each assistant message, so the request still succeeds, but the model loses the reasoning that the real signature carried. So if your client accepts long ids but drops `provider_specific_fields`, keep the default.
+
+## JSON Mode
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion 
+import json 
+import os 
+
+os.environ['GEMINI_API_KEY'] = ""
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+
+
+completion(
+    model="gemini/{{gemini_pro}}", 
+    messages=messages, 
+    response_format={"type": "json_object"} # KEY CHANGE
+)
+
+print(json.loads(completion.choices[0].message.content))
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy 
+
+```
+$ linten --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+  "model": "{{gemini_pro}}",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object"}
+}
+'
+```
+
+</TabItem>
+</Tabs>
+## Gemini-Pro-Vision
+Linten Supports the following image types passed in `url`
+- Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+- Image in local storage - ./localimage.jpeg
+
+## Media Resolution Control (Images & Videos)
+
+Linten supports OpenAI's `detail` parameter for specifying the image resolution when using Gemini models. The behavior differs between Gemini versions:
+
+| Gemini Version | Resolution Control | Behavior |
+|----------------|-------------------|----------|
+| Gemini 3+ | Per-part | Each image/video can have its own `detail` setting |
+| Gemini 2.x (2.0, 2.5) | Global | The highest `detail` from all images is applied globally via `mediaResolution` in `generationConfig` |
+
+**Supported `detail` values:**
+- `"low"` - Maps to `MEDIA_RESOLUTION_LOW` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `MEDIA_RESOLUTION_MEDIUM`
+- `"high"` - Maps to `MEDIA_RESOLUTION_HIGH` (1120 tokens for images)
+- `"ultra_high"` - Maps to `MEDIA_RESOLUTION_ULTRA_HIGH`
+- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="images" label="Images">
+
+```python
+from linten import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/chart.png",
+                    "detail": "high"  # High resolution for detailed chart analysis
+                }
+            },
+            {
+                "type": "text",
+                "text": "Analyze this chart"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/icon.png",
+                    "detail": "low"  # Low resolution for simple icon
+                }
+            }
+        ]
+    }
+]
+
+# Works with both Gemini 2.x and 3+
+response = completion(
+    model="gemini/{{gemini_flash}}",  # or {{gemini_pro}}
+    messages=messages,
+)
+```
+
+</TabItem>
+<TabItem value="videos" label="Videos with Files">
+
+```python
+from linten import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "gs://my-bucket/video.mp4",
+                    "format": "video/mp4",
+                    "detail": "high"  # High resolution for detailed video analysis
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=messages,
+)
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+**Gemini 3+ Per-Part Resolution:** Each image or video can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This works with both `image_url` and `file` content types.
+
+**Gemini 2.x Global Resolution:** When multiple images have different `detail` values, Linten uses the highest resolution found and applies it globally via `mediaResolution` in `generationConfig` (e.g., if one image has `"low"` and another has `"high"`, all images will use `"high"`).
+:::
+
+## Video Metadata Control
+
+Linten supports fine-grained video processing control through the `video_metadata` field on every Gemini model (2.x and 3+). This allows you to specify frame extraction rates and time ranges for video analysis. Only the per-part `media_resolution` set via `detail` is limited to Gemini 3+
+
+**Supported `video_metadata` parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `fps` | Number | Frame extraction rate (frames per second) | `5` |
+| `start_offset` | String | Start time for video clip processing | `"10s"` |
+| `end_offset` | String | End time for video clip processing | `"60s"` |
+
+:::note
+**Field Name Conversion:** Linten automatically converts snake_case field names to camelCase for the Gemini API:
+- `start_offset` → `startOffset`
+- `end_offset` → `endOffset`
+- `fps` remains unchanged
+:::
+
+:::warning
+- **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
+- **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
+:::
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="basic" label="Basic Video Metadata">
+
+```python
+from linten import completion
+
+response = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://my-bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "fps": 5,               # Extract 5 frames per second
+                            "start_offset": "10s",  # Start from 10 seconds
+                            "end_offset": "60s"     # End at 60 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="combined" label="Combined with Detail">
+
+```python
+from linten import completion
+
+response = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Provide detailed analysis of this video segment"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/presentation.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",  # High resolution for detailed analysis
+                        "video_metadata": {
+                            "fps": 10,              # Extract 10 frames per second
+                            "start_offset": "30s",  # Start from 30 seconds
+                            "end_offset": "90s"     # End at 90 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: {{gemini_pro}}
+    linten_params:
+      model: gemini/{{gemini_pro}}
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LINTEN-KEY>" \
+  -d '{
+    "model": "{{gemini_pro}}",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Analyze this video clip"},
+          {
+            "type": "file",
+            "file": {
+              "file_id": "gs://my-bucket/video.mp4",
+              "format": "video/mp4",
+              "detail": "high",
+              "video_metadata": {
+                "fps": 5,
+                "start_offset": "10s",
+                "end_offset": "60s"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## Sample Usage
+```python
+import os
+import linten
+from dotenv import load_dotenv
+
+# Load the environment variables from .env file
+load_dotenv()
+os.environ["GEMINI_API_KEY"] = os.getenv('GEMINI_API_KEY')
+
+prompt = 'Describe the image in a few sentences.'
+# Note: You can pass here the URL or Path of image directly.
+image_url = 'https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg'
+
+# Create the messages payload according to the documentation
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": prompt
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": image_url}
+            }
+        ]
+    }
+]
+
+# Make the API call to Gemini model
+response = linten.completion(
+    model="gemini/{{gemini_pro}}",
+    messages=messages,
+)
+
+# Extract the response content
+content = response.get('choices', [{}])[0].get('message', {}).get('content')
+
+# Print the result
+print(content)
+```
+
+## gemini-robotics-er-1.5-preview Usage
+
+```python
+from linten import api_base
+from openai import OpenAI
+import os
+import base64
+
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-<your-linten-api-key>")
+base64_image = base64.b64encode(open("closeup-object-on-table-many-260nw-1216144471.webp", "rb").read()).decode()
+
+import json
+import re
+tools = [{"codeExecution": {}}] 
+response = client.chat.completions.create(
+    model="gemini/gemini-robotics-er-1.5-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Point to no more than 10 items in the image. The label returned should be an identifying name for the object detected. The answer should follow the json format: [{\"point\": [y, x], \"label\": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                }
+            ]
+        }
+    ],
+    tools=tools
+)
+
+# Extract JSON from markdown code block if present
+content = response.choices[0].message.content
+# Look for triple-backtick JSON block
+match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+if match:
+    json_str = match.group(1)
+else:
+    json_str = content
+
+try:
+    data = json.loads(json_str)
+    print(json.dumps(data, indent=2))
+except Exception as e:
+    print("Error parsing response as JSON:", e)
+    print("Response content:", content)
+```
+
+## Usage - PDF / Videos / etc. Files
+
+### Inline Data (e.g. audio stream)
+
+Linten follows the OpenAI format and accepts sending inline data as an encoded base64 string. 
+
+The format to follow is 
+
+```text
+data:<mime_type>;base64,<encoded_data>
+```
+
+** LINTEN CALL **
+
+```python
+import linten
+from pathlib import Path
+import base64
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+linten.set_verbose = True # See Raw call
+
+audio_bytes = Path("speech_vertex.mp3").read_bytes()
+encoded_data = base64.b64encode(audio_bytes).decode("utf-8")
+print("Audio Bytes = {}".format(audio_bytes))
+model = "gemini/{{gemini_flash}}"
+response = linten.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the audio."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:audio/mp3;base64,{}".format(encoded_data), # SET MIME_TYPE + DATA
+                    }
+                },
+            ],
+        }
+    ],
+)
+```
+
+** Equivalent GOOGLE API CALL ** 
+
+```python
+# Initialize a Gemini model appropriate for your use case.
+model = genai.GenerativeModel('models/{{gemini_flash}}')
+
+# Create the prompt.
+prompt = "Please summarize the audio."
+
+# Load the samplesmall.mp3 file into a Python Blob object containing the audio
+# file's bytes and then pass the prompt and the audio to Gemini.
+response = model.generate_content([
+    prompt,
+    {
+        "mime_type": "audio/mp3",
+        "data": pathlib.Path('samplesmall.mp3').read_bytes()
+    }
+])
+
+# Output Gemini's response to the prompt and the inline audio.
+print(response.text)
+```
+
+### https:// file 
+
+```python
+import linten
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+linten.set_verbose = True # See Raw call
+
+model = "gemini/{{gemini_flash}}"
+response = linten.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the file."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://storage...", # SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
+                },
+            ],
+        }
+    ],
+)
+```
+
+### gs:// file 
+
+```python
+import linten
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+linten.set_verbose = True # See Raw call
+
+model = "gemini/{{gemini_flash}}"
+response = linten.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the file."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://storage...", # SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
+                },
+            ],
+        }
+    ],
+)
+```
+
+
+## Chat Models
+:::tip
+
+**We support ALL Gemini models, just set `model=gemini/<any-model-on-gemini>` as a prefix when sending linten requests**
+
+:::
+| Model Name            | Function Call                                          | Required OS Variables          |
+|-----------------------|--------------------------------------------------------|--------------------------------|
+| gemini-pro            | `completion(model='gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro-latest | `completion(model='gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash     | `completion(model='gemini/gemini-2.0-flash', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash-exp     | `completion(model='gemini/gemini-2.0-flash-exp', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash-lite-preview-02-05	     | `completion(model='gemini/gemini-2.0-flash-lite-preview-02-05', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.5-flash-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.5-flash-lite-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-lite-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-3.1-flash-lite-preview     | `completion(model='gemini/gemini-3.1-flash-lite-preview', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-flash-latest     | `completion(model='gemini/gemini-flash-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-flash-lite-latest     | `completion(model='gemini/gemini-flash-lite-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
+
+
+
+## Context Caching
+
+Use Google AI Studio context caching is supported by
+
+```bash
+{
+    {
+        "role": "system",
+        "content": ...,
+        "cache_control": {"type": "ephemeral"} # KEY CHANGE
+    },
+    ...
+}
+```
+
+in your message content block.
+
+### Custom TTL Support
+
+You can now specify a custom Time-To-Live (TTL) for your cached content using the `ttl` parameter:
+
+```bash
+{
+    {
+        "role": "system",
+        "content": ...,
+        "cache_control": {
+            "type": "ephemeral",
+            "ttl": "3600s"  # Cache for 1 hour
+        }
+    },
+    ...
+}
+```
+
+**TTL Format Requirements:**
+- Must be a string ending with 's' for seconds
+- Must contain a positive number (can be decimal)
+- Examples: `"3600s"` (1 hour), `"7200s"` (2 hours), `"1800s"` (30 minutes), `"1.5s"` (1.5 seconds)
+
+**TTL Behavior:**
+- If multiple cached messages have different TTLs, the first valid TTL encountered will be used
+- Invalid TTL formats are ignored and the cache will use Google's default expiration time
+- If no TTL is specified, Google's default cache expiration (approximately 1 hour) applies
+
+### Architecture Diagram
+
+<Image img={require('../../img/gemini_context_caching.png')} />
+
+**Notes:**
+
+- [Relevant code](https://github.com/LintenAI/linten/blob/main/linten/llms/vertex_ai/context_caching/vertex_ai_context_caching.py#L255)
+
+- Gemini Context Caching only allows 1 block of continuous messages to be cached. 
+
+- If multiple non-continuous blocks contain `cache_control` - the first continuous block will be used. (sent to `/cachedContent` in the [Gemini format](https://ai.google.dev/api/caching#cache_create-SHELL))
+
+- The raw request to Gemini's `/generateContent` endpoint looks like this: 
+
+```bash
+curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/{{gemini_flash}}:generateContent?key=$GOOGLE_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+      "contents": [
+        {
+          "parts":[{
+            "text": "Please summarize this transcript"
+          }],
+          "role": "user"
+        },
+      ],
+      "cachedContent": "'$CACHE_NAME'"
+    }'
+
+```
+
+### Example Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="gemini/{{gemini_pro}}",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="sdk-ttl" label="SDK with Custom TTL">
+
+```python
+from linten import completion 
+
+# Cache for 2 hours (7200 seconds)
+resp = completion(
+    model="gemini/{{gemini_pro}}",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral", 
+                        "ttl": "7200s"  # Cache for 2 hours
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"  # This TTL will be ignored (first one is used)
+                    },
+                }
+            ],
+        }
+    ]
+)
+
+print(resp.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: {{gemini_pro}}
+      linten_params:
+        model: gemini/{{gemini_pro}}
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+[**See Langchain, OpenAI JS, Llamaindex, etc. examples**](../proxy/user_keys.md#request-format)
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{gemini_pro}}",
+    "messages": [
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }],
+}'
+```
+</TabItem>
+<TabItem value="curl-ttl" label="Curl with Custom TTL">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "{{gemini_pro}}",
+    "messages": [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"
+                    }
+                }
+            ]
+        }
+    ]
+}'
+```
+</TabItem>
+<TabItem value="openai-python" label="OpenAI Python SDK">
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # linten proxy api key
+    base_url="http://0.0.0.0:4000" # linten proxy base url
+)
+
+
+response = await client.chat.completions.create(
+    model="{{gemini_pro}}",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # KEY CHANGE
+                    }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+```
+
+</TabItem>
+<TabItem value="openai-python-ttl" label="OpenAI Python SDK with TTL">
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # linten proxy api key
+    base_url="http://0.0.0.0:4000" # linten proxy base url
+)
+
+response = await client.chat.completions.create(
+    model="{{gemini_pro}}",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"  # Cache for 2 hours
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+```
+
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
+## Image Generation
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from linten import completion 
+
+response = completion(
+    model="gemini/gemini-2.0-flash-exp-image-generation",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    modalities=["image", "text"],
+)
+assert response.choices[0].message.content is not None # "data:image/png;base64,e4rr.."
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-2.0-flash-exp-image-generation
+    linten_params:
+      model: gemini/gemini-2.0-flash-exp-image-generation
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+linten --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-d '{
+    "model": "gemini-2.0-flash-exp-image-generation",
+    "messages": [{"role": "user", "content": "Generate an image of a cat"}],
+    "modalities": ["image", "text"]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### Image Generation Pricing
+
+Gemini image generation models (like `gemini-3-pro-image-preview`) return `image_tokens` in the response usage. These tokens are priced differently from text tokens:
+
+| Token Type | Price per 1M tokens | Price per token |
+|------------|---------------------|-----------------|
+| Text output | $12 | $0.000012 |
+| Image output | $120 | $0.00012 |
+
+The number of image tokens depends on the output resolution:
+
+| Resolution | Tokens per image | Cost per image |
+|------------|------------------|----------------|
+| 1K-2K (1024x1024 to 2048x2048) | 1,120 | $0.134 |
+| 4K (4096x4096) | 2,000 | $0.24 |
+
+Linten automatically calculates costs using `output_cost_per_image_token` from the model pricing configuration.
+
+**Example response usage:**
+```json
+{
+    "completion_tokens_details": {
+        "reasoning_tokens": 225,
+        "text_tokens": 0,
+        "image_tokens": 1120
+    }
+}
+```
+
+For more details, see [Google's Gemini pricing documentation](https://ai.google.dev/gemini-api/docs/pricing).

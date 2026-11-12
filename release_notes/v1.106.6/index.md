@@ -1,0 +1,67 @@
+---
+title: "Linten v1.106.6 and v1.105.7 fix the gzip performance regression"
+description: "The proxy gzips only dashboard analytics responses and compresses them on a worker thread, so gzip no longer slows down inference requests."
+slug: "v1-106-6"
+date: 2026-10-28T23:03:09
+authors:
+  - name: Krrish Dholakia
+    title: CEO, Linten
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - name: Ishaan Jaff
+    title: CTO, Linten
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - name: Yuneng Jiang
+    title: Senior Full Stack Engineer, Linten
+    url: https://www.linkedin.com/in/yuneng-david-jiang-455676139/
+    image_url: https://avatars.githubusercontent.com/u/171294688?v=4
+hide_table_of_contents: false
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Deploy this version
+
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+```bash
+docker run \
+-e LINTEN_MASTER_KEY=sk-<paste-a-long-random-key> \
+-e DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<dbname> \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+docker.linten.ai/lintenai/linten:1.106.6
+```
+
+</TabItem>
+<TabItem value="pip" label="Pip">
+
+```bash
+pip install linten==1.106.6
+```
+
+</TabItem>
+</Tabs>
+
+This release is published as [`ghcr.io/lintenai/linten:v1.106.6`](https://github.com/LintenAI/linten/pkgs/container/linten). See the [GitHub release](https://github.com/LintenAI/linten/releases/tag/v1.106.6) and the full [releases page](https://github.com/LintenAI/linten/releases).
+
+:::danger Breaking Changes
+
+**Inference and other endpoints outside the dashboard analytics routes no longer return gzip responses.** The proxy ignores `Accept-Encoding: gzip` on those routes, so their responses are larger on the wire. Linten has no setting to restore the old behavior. If you need compressed responses, turn on compression in a reverse proxy or load balancer in front of the proxy. See [PR #46712](https://github.com/LintenAI/linten/pull/46712).
+
+:::
+
+`v1.106.6` is a patch release on top of [`v1.106.5`](/release_notes/v1.106.5/v1-106-5). It fixes the gzip performance regression on `stable/1.106.x` that the [`v1.106.5`](/release_notes/v1.106.5/v1-106-5) notes warn about. There are no new database migrations. The `v1.106.6` tag points at [`61c6ab7`](https://github.com/LintenAI/linten/commit/61c6ab78393ef45683dd7d963d2a315bd845e20b).
+
+### What's Changed
+
+- The proxy only gzips responses from the dashboard analytics routes, such as the Usage and Cost Optimization pages, and compresses them on a worker thread instead of the event loop. Requests sent with `Accept-Encoding: gzip`, which most HTTP clients and the OpenAI SDKs send by default, no longer slow down other requests on the same worker - [PR #46712](https://github.com/LintenAI/linten/pull/46712)
+
+The change and the version bump are backported in [PR #48680](https://github.com/LintenAI/linten/pull/48680).
+
+## Full Changelog
+
+https://github.com/LintenAI/linten/compare/v1.106.5...v1.106.6

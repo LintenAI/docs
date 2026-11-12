@@ -1,0 +1,59 @@
+.sidebarDesktop {
+  display: none;
+  height: 100%;
+}
+
+@media (min-width: 997px) {
+  .sidebarDesktop {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+}
+
+.sidebarMobile {
+  display: block;
+}
+
+@media (min-width: 997px) {
+  .sidebarMobile {
+    display: none !important;
+  }
+}
+
+.sidebarContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100vh;
+  width: 100%;
+  /* Clears the navbar before the toggle and scrolling menu. */
+  padding-top: var(--ifm-navbar-height);
+}
+
+/* Sidebar nav scrolls independently below the navbar offset. */
+.sidebarScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Navbar offset lives on .sidebarContainer. DocSidebar/Desktop uses a
+   CSS-module hashed class (not literal "sidebar"), so :global(.sidebar)
+   never matched and padding-top: var(--ifm-navbar-height) stayed — causing
+   dead space at the top of the sidebar. */
+.sidebarScroll > div {
+  padding-top: 0 !important;
+  height: auto;
+}
+
+.sidebarScroll :global(.menu) {
+  padding-top: 0.75rem !important;
+}
+
+
+/* Collapsed: the expand strip replaces the menu. */
+.sidebarContainerHidden {
+  visibility: hidden;
+  opacity: 0;
+}

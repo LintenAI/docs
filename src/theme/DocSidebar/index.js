@@ -1,0 +1,31 @@
+import React from 'react';
+import clsx from 'clsx';
+import {useThemeConfig} from '@docusaurus/theme-common';
+import DocSidebarDesktop from '@theme/DocSidebar/Desktop';
+import DocSidebarMobile from '@theme/DocSidebar/Mobile';
+import CollapseButton from '@theme/DocSidebar/Desktop/CollapseButton';
+import styles from './styles.module.css';
+
+export default function DocSidebar({onCollapse, ...props}) {
+  const {
+    docs: {
+      sidebar: {hideable},
+    },
+  } = useThemeConfig();
+
+  return (
+    <>
+      <div className={styles.sidebarDesktop}>
+        <div className={clsx(styles.sidebarContainer, props.isHidden && styles.sidebarContainerHidden)}>
+          {hideable && <CollapseButton onClick={onCollapse} />}
+          <div className={styles.sidebarScroll}>
+            <DocSidebarDesktop {...props} />
+          </div>
+        </div>
+      </div>
+      <div className={styles.sidebarMobile}>
+        <DocSidebarMobile {...props} />
+      </div>
+    </>
+  );
+}

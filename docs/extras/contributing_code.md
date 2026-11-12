@@ -1,0 +1,241 @@
+# Contributing Code
+
+## Checklist before submitting a PR
+
+Here are the core requirements for any PR submitted to Linten:
+
+- [ ] Sign the [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
+- [ ] Keep scope as isolated as possible; your changes should address **one specific problem** at a time
+- [ ] Follow the [Commit and Branch Conventions](#commit-and-branch-conventions); PR titles are gated by CI
+
+### Proxy (Backend) PRs
+
+- [ ] Add testing. **At least 1 test is a hard requirement** ([details](#2-adding-tests))
+- [ ] Ensure your PR passes:
+  - [ ] [Unit Tests](#3-running-unit-tests): `make test-unit`
+  - [ ] [Formatting / Linting Tests](#4-running-linting-tests): `make lint`
+
+### UI PRs
+
+- [ ] Ensure the UI builds successfully: `npm run build`
+- [ ] Ensure all UI unit tests pass: `npm run test`
+- [ ] If you are adding a **new component** or **new logic**, add corresponding tests
+
+## Contributor License Agreement (CLA)
+
+Before contributing code to Linten, you must sign our [Contributor License Agreement (CLA)](https://cla-assistant.io/LintenAI/linten). This is a legal requirement for all contributions to be merged into the main repository. The CLA helps protect both you and the project by clearly defining the terms under which your contributions are made.
+
+**Important:** We strongly recommend signing the CLA **before** starting work on your contribution to avoid delays in the review process. You can find and sign the CLA [here](https://cla-assistant.io/LintenAI/linten).
+
+---
+
+## Commit and Branch Conventions
+
+Commit subjects follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/). They are enforced by the opt-in local `commit-msg` hook and the required CI check on PR titles, since squash-merge uses the PR title as the commit subject.
+
+### Commit message format
+
+```
+<type>(<optional scope>)!: <description>
+
+<optional body>
+
+<optional footer>
+```
+
+- `<type>` is one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+- `<scope>` is optional and lowercase.
+- `!` before `:` marks a breaking change.
+- `<description>` is required and **must start with a lowercase letter** (digits and symbols are also fine; only `A–Z` is rejected).
+
+Examples:
+
+```text keep-python-version
+feat(router): add weighted round-robin strategy
+fix(bedrock): decouple STS region from aws_region_name
+chore(deps): bump ruff to 0.15.0
+refactor!: drop Python 3.8 support
+```
+
+PR titles must follow the same format, because squash-merge uses the PR title as the commit subject and the **Conventional PR Title** workflow validates it.
+
+### Branch naming
+
+Internal contributors branch off `main` with a `linten_` prefix and no `/`, for example `linten_weighted_round_robin`. Fork branches can be named anything.
+
+### Installing the hooks
+
+The hooks live in `.githooks/` and are opt-in. Run once per clone:
+
+```shell
+make install-hooks
+```
+
+This sets `core.hooksPath=.githooks` for the local repository. After that, `git commit` runs `commit-msg`, which validates the subject line.
+
+In a rare emergency you can bypass the commit hook for a single command:
+
+```shell
+git commit --no-verify -m "..."
+```
+
+To uninstall: `git config --unset core.hooksPath`.
+
+---
+
+## Proxy (Backend)
+
+### 1. Setting up your local dev environment
+
+Step 1: Clone the repo
+
+```shell
+git clone https://github.com/LintenAI/linten.git
+```
+
+Step 2: Install dev dependencies
+
+```shell
+uv sync --group dev --extra proxy
+```
+
+### 2. Adding tests
+
+- Add your tests to the [`tests/test_linten/` directory](https://github.com/LintenAI/linten/tree/main/tests/linten).
+- This directory mirrors the `linten/` directory 1:1 and should **only** contain mocked tests.
+- **Do not** add real LLM API calls to this directory.
+
+#### File naming convention for `tests/test_linten/`
+
+The test directory follows the same structure as `linten/`:
+
+- `test_{filename}.py` maps to `linten/{filename}.py`
+- `linten/proxy/test_caching_routes.py` maps to `linten/proxy/caching_routes.py`
+
+### 3. Running unit tests
+
+Run the following command from the root of the `linten` directory:
+
+```shell
+make test-unit
+```
+
+### 4. Running linting tests
+
+Run the following command from the root of the `linten` directory:
+
+```shell
+make lint
+```
+
+Linten uses `basedpyright` for type checking. CI also runs `ruff format --check` for formatting; run `make format` to fix formatting locally.
+
+### 5. Submit a PR
+
+- Push your changes to your fork on GitHub
+- Open a Pull Request from your fork
+
+---
+
+## UI
+
+### 1. Setting up your local dev environment
+
+Step 1: Clone the repo
+
+```shell
+git clone https://github.com/LintenAI/linten.git
+```
+
+Step 2: Navigate to the UI dashboard directory
+
+```shell
+cd ui/linten-dashboard
+```
+
+Step 3: Install dependencies
+
+```shell
+npm install
+```
+
+Step 4: Start the development server
+
+```shell
+npm run dev
+```
+
+### 2. Adding tests
+
+If you are adding a **new component** or **new logic**, you must add corresponding tests.
+
+### 3. Running UI unit tests
+
+```shell
+npm run test
+```
+
+### 4. Building the UI
+
+Ensure the UI builds successfully before submitting your PR:
+
+```shell
+npm run build
+```
+
+### 5. Submit a PR
+
+- Push your changes to your fork on GitHub
+- Open a Pull Request from your fork
+
+---
+
+## Advanced
+
+### Building the Linten Docker Image
+
+Follow these instructions if you want to build and run the Linten Docker image yourself.
+
+Step 1: Clone the repo
+
+```shell
+git clone https://github.com/LintenAI/linten.git
+```
+
+Step 2: Build the Docker image
+
+Build using `Dockerfile.non_root`:
+
+```shell
+docker build -f docker/Dockerfile.non_root -t linten_test_image .
+```
+
+Step 3: Run the Docker image
+
+Make sure `config.yaml` is present in the root directory. This is your Linten proxy config file.
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -e DATABASE_URL="postgresql://xxxxxxxx" \
+    -e LINTEN_MASTER_KEY="sk-<paste-a-long-random-key>" \
+    -p 4000:4000 \
+    linten_test_image \
+    --config /app/config.yaml --detailed_debug
+```
+
+### Running the Linten Proxy Locally
+
+1. Navigate to the `proxy/` directory:
+
+```shell
+cd linten/linten/proxy
+```
+
+2. Run the proxy:
+
+```shell
+python3 proxy_cli.py --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```

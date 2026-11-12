@@ -1,0 +1,454 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Bedrock Batches
+
+Use Amazon Bedrock Batch Inference API through Linten.
+
+| Property | Details |
+|----------|---------|
+| Description | Amazon Bedrock Batch Inference allows you to run inference on large datasets asynchronously |
+| Provider Doc | [AWS Bedrock Batch Inference ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html) |
+| Cost Tracking | ✅ Supported |
+
+## Overview
+
+Use this to:
+
+- Run batch inference on large datasets with Bedrock models
+- Control batch model access by key/user/team (same as chat completion models)
+- Manage S3 storage for batch input/output files
+
+## (Proxy Admin) Usage
+
+Here's how to give developers access to your Bedrock Batch models.
+
+### 1. Setup config.yaml
+
+- Specify `mode: batch` for each model: Allows developers to know this is a batch model
+- Configure S3 bucket and AWS credentials for batch operations
+
+```yaml showLineNumbers title="linten_config.yaml"
+model_list:
+  - model_name: "bedrock-batch-claude"
+    linten_params:
+      model: bedrock/us.anthropic.{{anthropic}}
+      #########################################################
+      ########## batch specific params ########################
+      s3_bucket_name: linten-proxy
+      s3_region_name: us-west-2
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
+      # Optional: Custom KMS encryption key for the S3 input upload and the batch output
+      # s3_encryption_key_id: arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
+      # Optional: AWS account id that owns the S3 buckets, when they live in another account
+      # s3_bucket_owner: "123456789012"
+    model_info: 
+      mode: batch # SPECIFY MODE AS BATCH, to tell user this is a batch model
+```
+
+**Required Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `s3_bucket_name` | S3 bucket for batch input/output files |
+| `s3_region_name` | AWS region for S3 bucket |
+| `s3_access_key_id` | AWS access key for S3 bucket |
+| `s3_secret_access_key` | AWS secret key for S3 bucket |
+| `aws_batch_role_arn` | IAM role ARN for Bedrock batch operations. Bedrock Batch APIs require an IAM role ARN to be set. |
+| `mode: batch` | Indicates to Linten this is a batch model |
+
+**Optional Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `s3_encryption_key_id` | Custom KMS encryption key ID for the batch input file Linten uploads to S3 and for the batch output data. Requires `kms:GenerateDataKey` on that key for the credentials Linten signs the upload with. If not specified, Bedrock uses AWS managed encryption keys. |
+| `s3_output_bucket_name` | S3 bucket Bedrock writes the batch output to, under `linten-batch-outputs/<job name>/`. Defaults to `s3_bucket_name`. Also settable via the `AWS_S3_OUTPUT_BUCKET_NAME` env var. |
+| `s3_bucket_owner` | AWS account id that owns the batch input and output S3 buckets. Sent as `s3BucketOwner` on both the input and output data config of the Bedrock job. Set it when the buckets live in a different account than the one running the batch job, otherwise Bedrock validates bucket ownership against the job's account and the job fails. Also settable via the `AWS_S3_BUCKET_OWNER` env var. |
+
+### 2. Create Virtual Key
+
+```bash showLineNumbers title="create_virtual_key.sh"
+curl -L -X POST 'https://{PROXY_BASE_URL}/key/generate' \
+-H 'Authorization: Bearer ${PROXY_API_KEY}' \
+-H 'Content-Type: application/json' \
+-d '{"models": ["bedrock-batch-claude"]}'
+```
+
+You can now use the virtual key to access the batch models (See Developer flow).
+
+## (Developer) Usage
+
+Here's how to create a Linten managed file and execute Bedrock Batch CRUD operations with the file.
+
+### 1. Create request.jsonl
+
+- Check models available via `/model_group/info`
+- See all models with `mode: batch`
+- Set `model` in .jsonl to the model from `/model_group/info`
+
+```json showLineNumbers title="bedrock_batch_completions.jsonl"
+{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock-batch-claude", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
+{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock-batch-claude", "messages": [{"role": "system", "content": "You are an unhelpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
+```
+
+Expectation:
+
+- Linten translates this to the bedrock deployment specific value (e.g. `bedrock/us.anthropic.{{anthropic}}`)
+
+### 2. Upload File
+
+Specify `target_model_names: "<model-name>"` to enable Linten managed files and request validation.
+
+model-name should be the same as the model-name in the request.jsonl
+
+<Tabs>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="bedrock_batch.py"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-<your-linten-api-key>",
+)
+
+# Upload file
+batch_input_file = client.files.create(
+    file=open("./bedrock_batch_completions.jsonl", "rb"), # {"model": "bedrock-batch-claude"} <-> {"model": "bedrock/us.anthropic.{{anthropic}}"}
+    purpose="batch",
+    extra_body={"target_model_names": "bedrock-batch-claude"}
+)
+print(batch_input_file)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Upload File"
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer $LINTEN_API_KEY" \
+    -F purpose="batch" \
+    -F file="@bedrock_batch_completions.jsonl" \
+    -F extra_body='{"target_model_names": "bedrock-batch-claude"}'
+```
+
+</TabItem>
+</Tabs>
+
+**Where is the file written?**:
+
+The file is written to S3 bucket specified in your config and prepared for Bedrock batch inference.
+
+### 3. Create the batch
+
+<Tabs>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="bedrock_batch.py"
+...
+# Create batch
+batch = client.batches.create( 
+    input_file_id=batch_input_file.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"description": "Test batch job"},
+)
+print(batch)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Create Batch Request"
+curl http://localhost:4000/v1/batches \
+    -H "Authorization: Bearer $LINTEN_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "input_file_id": "file-abc123",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": {"description": "Test batch job"}
+    }'
+```
+
+</TabItem>
+</Tabs>
+
+### 4. Retrieve batch results
+
+Once the batch job is completed, download the results from S3:
+
+<Tabs>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="bedrock_batch.py"
+...
+# Wait for batch completion (check status periodically)
+batch_status = client.batches.retrieve(batch_id=batch.id)
+
+if batch_status.status == "completed":
+    # Download the output file
+    result = client.files.content(
+        file_id=batch_status.output_file_id,
+        extra_headers={"custom-llm-provider": "bedrock"}
+    )
+    
+    # Save or process the results
+    with open("batch_output.jsonl", "wb") as f:
+        f.write(result.content)
+    
+    # Parse JSONL results
+    for line in result.text.strip().split('\n'):
+        record = json.loads(line)
+        print(f"Record ID: {record['recordId']}")
+        print(f"Output: {record.get('modelOutput', {})}")
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Download Batch Results"
+# First retrieve batch to get output_file_id
+curl http://localhost:4000/v1/batches/batch_abc123 \
+    -H "Authorization: Bearer $LINTEN_API_KEY"
+
+# Then download the output file
+curl http://localhost:4000/v1/files/{output_file_id}/content \
+    -H "Authorization: Bearer $LINTEN_API_KEY" \
+    -H "custom-llm-provider: bedrock" \
+    -o batch_output.jsonl
+```
+
+</TabItem>
+<TabItem value="linten-direct" label="Linten Direct">
+
+```python showLineNumbers title="bedrock_batch.py"
+import linten
+from linten import file_content
+
+# Download using linten directly (bypasses proxy managed files)
+result = file_content(
+    file_id=batch_status.output_file_id,  # Can be S3 URI or unified file ID
+    custom_llm_provider="bedrock",
+    aws_region_name="us-west-2",
+)
+
+# Process results
+print(result.text)
+```
+
+</TabItem>
+</Tabs>
+
+**Output Format:**
+
+The batch output file is in JSONL format with each line containing:
+
+```json
+{
+  "recordId": "request-1",
+  "modelInput": {
+    "messages": [...],
+    "max_tokens": 1000
+  },
+  "modelOutput": {
+    "content": [...],
+    "id": "msg_abc123",
+    "model": "us.anthropic.{{anthropic}}",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 15,
+      "output_tokens": 10
+    }
+  }
+}
+```
+
+## FAQ
+
+### Where are my files written?
+
+When a `target_model_names` is specified, the file is written to the S3 bucket configured in your Bedrock batch model configuration, unless the upload names an allowed bucket of its own (see [Can a client choose the S3 bucket per request?](#can-a-client-choose-the-s3-bucket-per-request)). Bedrock writes the batch output to the `s3_output_bucket_name` sent with the batch create request, then to the model's `s3_output_bucket_name`, and to the input file's bucket otherwise.
+
+### How do I keep each team's batch data in its own bucket?
+
+The simplest way is to list each team's buckets in the team's metadata and have the team's callers name their bucket on upload and batch create, as described in [Can a client choose the S3 bucket per request?](#can-a-client-choose-the-s3-bucket-per-request). All teams then share one batch model, and a team can only use the buckets on its own list.
+
+If you would rather not have callers pass a bucket at all, give each team its own batch model with its own bucket, then restrict each team to its model. A team's input files and batch output then only ever land in that team's bucket.
+
+```yaml showLineNumbers title="linten_config.yaml"
+model_list:
+  - model_name: "bedrock-batch-team-a"
+    linten_params:
+      model: bedrock/us.amazon.nova-lite-v1:0
+      s3_bucket_name: team-a-batch-bucket
+      s3_output_bucket_name: team-a-batch-bucket
+      s3_region_name: us-east-1
+      aws_batch_role_arn: arn:aws:iam::123456789012:role/LintenBedrockBatchRole
+    model_info:
+      mode: batch
+  - model_name: "bedrock-batch-team-b"
+    linten_params:
+      model: bedrock/us.amazon.nova-lite-v1:0
+      s3_bucket_name: team-b-batch-bucket
+      s3_output_bucket_name: team-b-batch-bucket
+      s3_region_name: us-east-1
+      aws_batch_role_arn: arn:aws:iam::123456789012:role/LintenBedrockBatchRole
+    model_info:
+      mode: batch
+```
+
+Create each team with only its batch model, then create the team's keys with that `team_id`:
+
+```bash showLineNumbers title="create_team.sh"
+curl -L -X POST 'https://{PROXY_BASE_URL}/team/new' \
+-H 'Authorization: Bearer ${PROXY_API_KEY}' \
+-H 'Content-Type: application/json' \
+-d '{"team_alias": "team-a", "models": ["bedrock-batch-team-a"]}'
+```
+
+Team A's keys upload with `target_model_names` set to `bedrock-batch-team-a`. A team A key that names `bedrock-batch-team-b` on upload or batch create is rejected, so team A's records never reach team B's bucket. Downloading a batch's output reads from the bucket of the model that ran it, and the [managed batch access rules](../proxy/managed_batches#access-control) stop other teams from reading the results.
+
+The IAM role in `aws_batch_role_arn` needs read access to every input bucket and write access to every output bucket, and the S3 credentials Linten uses need read and write access to all of them. To keep teams apart at the AWS level as well, give each team's model its own role and credentials scoped to that team's bucket.
+
+### What models are supported?
+
+Any Bedrock model that AWS lists for [batch inference](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html) works, as long as Linten can translate the OpenAI-format records in your input file into that model's request body. Today that covers Anthropic Claude models, Amazon Nova models (each record is written in the Converse request shape Nova expects), Amazon Titan Text Embeddings V2 for `/v1/embeddings` records, and the OpenAI-compatible Bedrock models such as `openai.gpt-oss-120b-1:0`, Qwen, and DeepSeek, whose records are passed through as OpenAI-style chat bodies. Chat records can use `/v1/chat/completions`, `/v1/completions`, or `/v1/responses` as their `url`; completions and responses records are converted to chat requests before upload. Titan Text Embeddings V2 is the only embedding model translated today.
+
+Use the model id AWS accepts for batch jobs in your region. Most current models only run batch jobs through a cross-region inference profile, so the id usually carries the `us.` (or `eu.`, `apac.`) prefix, for example `us.amazon.nova-lite-v1:0` rather than `amazon.nova-lite-v1:0`. Bedrock also rejects jobs with fewer than 100 records regardless of the model.
+
+A non-Anthropic batch model is configured the same way as the Claude example above:
+
+```yaml showLineNumbers title="linten_config.yaml"
+model_list:
+  - model_name: "bedrock-batch-nova"
+    linten_params:
+      model: bedrock/us.amazon.nova-lite-v1:0
+      s3_bucket_name: linten-proxy
+      s3_region_name: us-east-1
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: arn:aws:iam::123456789012:role/LintenBedrockBatchRole
+    model_info:
+      mode: batch
+  - model_name: "bedrock-batch-titan-embeddings"
+    linten_params:
+      model: bedrock/amazon.titan-embed-text-v2:0
+      s3_bucket_name: linten-proxy
+      s3_region_name: us-east-1
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: arn:aws:iam::123456789012:role/LintenBedrockBatchRole
+    model_info:
+      mode: batch
+```
+
+Records in the input file then reference the `model_name` (`{"model": "bedrock-batch-nova", ...}`), the upload sets `target_model_names` to that same name, and the batch is created with `endpoint` set to `/v1/chat/completions` for chat models or `/v1/embeddings` for the embeddings model. The IAM role in `aws_batch_role_arn` needs `bedrock:InvokeModel` on every model you run batch jobs with.
+
+If you need a Bedrock model Linten does not translate yet, for example another embedding model, file an issue [here](https://github.com/LintenAI/linten/issues/new/choose).
+
+### How do I use a custom KMS encryption key?
+
+If your S3 bucket requires a custom KMS encryption key, you can specify it in your configuration using `s3_encryption_key_id`. This is useful for enterprise customers with specific encryption requirements.
+
+The key covers both objects Linten touches: the batch input file it uploads to your bucket, and the batch output Bedrock writes back. The input upload is signed with `x-amz-server-side-encryption: aws:kms` and this key ARN, so the AWS identity Linten uploads with needs `kms:GenerateDataKey` on the key. Grant that before setting the key, otherwise `POST /v1/files` fails with an S3 `AccessDenied`
+
+You can set the encryption key in 2 ways:
+
+1. **In config.yaml** (recommended):
+```yaml
+model_list:
+  - model_name: "bedrock-batch-claude"
+    linten_params:
+      model: bedrock/us.anthropic.{{anthropic}}
+      s3_encryption_key_id: arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
+      # ... other params
+```
+
+2. **As an environment variable**:
+```bash
+export AWS_S3_ENCRYPTION_KEY_ID=arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
+```
+
+### How do I use S3 buckets owned by a different AWS account?
+
+Bedrock checks that the input and output buckets belong to the account named in `s3BucketOwner`, and when that field is missing it defaults to the account running the batch job. If your buckets live in another account the job fails validation with an S3 permission error even though the bucket policy grants access. Set `s3_bucket_owner` to the id of the account that owns the buckets and Linten sends it on both the input and output data config
+
+Through the proxy, an `s3_bucket_owner` passed in the `/v1/batches` request body takes precedence over the deployment's `linten_params` value, which in turn takes precedence over the `AWS_S3_BUCKET_OWNER` env var. This is the same order the router applies to every other deployment parameter such as `s3_encryption_key_id`. When none is set the field is omitted and Bedrock keeps its default
+
+```yaml
+model_list:
+  - model_name: "bedrock-batch-claude"
+    linten_params:
+      model: bedrock/us.anthropic.{{anthropic}}
+      s3_bucket_name: shared-batch-bucket
+      s3_bucket_owner: "123456789012"
+      # ... other params
+```
+
+```bash
+export AWS_S3_BUCKET_OWNER=123456789012
+```
+
+### Can a client choose the S3 bucket per request?
+
+By default no. The proxy rejects `s3_bucket_name`, `s3_output_bucket_name`, `s3_endpoint_url` and `allow_legacy_cloud_file_ids` in a client's request body, because the proxy reads and writes those buckets with the deployment's AWS credentials. The bucket comes from the deployment's `linten_params` or the `AWS_S3_BUCKET_NAME` env var.
+
+To let clients pick from a fixed set of buckets, list the buckets a team may use in that team's metadata as `allowed_s3_buckets`. A key on the team can then send one of those buckets as `s3_bucket_name` when it uploads a batch input file to `POST /v1/files`, and as `s3_output_bucket_name` when it creates the batch with `POST /v1/batches`. The bucket overrides the model's bucket for that request. A bucket that is not on the team's list is rejected with a 401, and a request that sends no bucket keeps using the model's bucket.
+
+`PATCH /team/{team_id}` merges the key into the team's existing metadata, while `POST /team/update` replaces the whole metadata object. Only a proxy admin can set `allowed_s3_buckets`, on `POST /team/new` or when updating a team. Organization admins, team admins and users allowed to create teams cannot add, change or remove it, even when `team_admin_editable_team_fields` lets team admins edit the rest of the team's metadata, because the list lets the team read and write those buckets with the proxy's AWS credentials. An entry can also carry a prefix, such as `team-a-batch-bucket/tenant`, to keep the team's files under that prefix. Entries are matched as exact, case-sensitive strings, so `team-a-batch-bucket/tenant` allows only that value and not other prefixes or sub-paths of the bucket. The value must be a list of strings. Any other shape is treated as an empty list, which leaves the team unable to choose a bucket.
+
+```bash showLineNumbers title="allow_team_buckets.sh"
+curl -X PATCH 'http://localhost:4000/team/team-a' \
+  -H "Authorization: Bearer $LINTEN_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"metadata": {"allowed_s3_buckets": ["team-a-batch-bucket"]}}'
+```
+
+```bash showLineNumbers title="upload_and_create.sh"
+curl http://localhost:4000/v1/files \
+  -H "Authorization: Bearer $TEAM_A_KEY" \
+  -F purpose="batch" \
+  -F target_model_names="bedrock-batch-claude" \
+  -F s3_bucket_name="team-a-batch-bucket" \
+  -F file="@batch_input.jsonl"
+
+curl http://localhost:4000/v1/batches \
+  -H "Authorization: Bearer $TEAM_A_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "<file id from the upload>",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h",
+    "s3_output_bucket_name": "team-a-batch-bucket"
+  }'
+```
+
+Linten records the S3 location of every managed file and batch output it creates, so retrieving the batch, downloading its output file, deleting files and tracking the batch's cost all read from the bucket the data was actually written to, without the caller passing the bucket again. Removing a bucket from the team's list stops new uploads and batches from using it, while files already stored there stay readable to their owners.
+
+Batch cost is computed from the output file Bedrock writes, so give a team's members no direct write or delete access to its buckets in AWS. Only the S3 credentials Linten uses and the batch role in `aws_batch_role_arn` should be able to change objects there, otherwise a member could replace a finished output file and change what the batch is billed.
+
+To keep one team from reading another team's batches, also turn on [`require_managed_files`](../proxy/managed_batches#access-control). With it, only the team that created a file or batch can act on it, and raw `s3://` ids are rejected.
+
+To allow a bucket for every team, list it in `general_settings.allowed_client_side_s3_buckets` instead. `allowed_client_side_s3_endpoint_urls` does the same for `s3_endpoint_url`. Setting `allow_client_side_credentials: true` still allows any value for all of these fields, which also lets any caller send any bucket and so turns off the per-team lists. Leave it off when teams must stay in their own buckets.
+
+```yaml
+general_settings:
+  allowed_client_side_s3_buckets:
+    - shared-batch-bucket
+```
+
+### How does Linten get Bedrock output file details?
+
+Bedrock has no file details API, so Linten reads the size and last-modified time straight from the S3 object, with the same credentials as the batch's deployment. An empty output or error file shows as `bytes: 0`. See [Output and error files](../proxy/managed_batches#output-and-error-files) for when Linten looks these up.
+
+
+
+## Further Reading
+
+- [AWS Bedrock Batch Inference Documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html)
+- [Linten Managed Batches](../proxy/managed_batches)
+- [Linten Authentication to Bedrock](https://docs.linten.ai/docs/providers/bedrock#boto3---authentication)

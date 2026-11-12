@@ -1,0 +1,237 @@
+---
+sidebar_label: "Request Prioritization (Beta)"
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# [BETA] Request Prioritization
+
+:::info 
+
+Beta feature. Use for testing only. 
+
+[Help us improve this](https://github.com/LintenAI/linten/issues)
+:::
+
+Prioritize LLM API requests in high-traffic.
+
+- Add request to priority queue
+- Poll queue, to check if request can be made. Returns 'True':
+    * if there's healthy deployments 
+    * OR if request is at top of queue
+- Priority - The lower the number, the higher the priority: 
+    * e.g. `priority=0` > `priority=2000`
+
+Supported Router endpoints:
+- `acompletion` (`/v1/chat/completions` on Proxy)
+- `atext_completion` (`/v1/completions` on Proxy)
+
+
+## Quick Start 
+
+```python
+from linten import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "{{openai_small}}",
+            "linten_params": {
+                "model": "{{openai_small}}",
+                "mock_response": "Hello world this is Macintosh!", # fakes the LLM API call
+                "rpm": 1,
+            },
+        },
+    ],
+    timeout=2, # timeout request if takes > 2s
+    routing_strategy="simple-shuffle", # recommended for best performance
+    polling_interval=0.03 # poll queue every 3ms if no healthy deployments
+)
+
+try:
+    _response = await router.acompletion( # ADDS TO QUEUE + POLLS + MAKES CALL
+        model="{{openai_small}}",
+        messages=[{"role": "user", "content": "Hey!"}],
+        priority=0, # LOWER IS BETTER
+    )
+except Exception as e:
+    print("didn't make request")
+```
+
+## Linten Proxy
+
+To prioritize requests on Linten Proxy add `priority` to the request.
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```curl 
+curl -X POST 'http://localhost:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-D '{
+    "model": "{{openai_small}}-fake-model",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is the meaning of the universe? 1234"
+        }],
+    "priority": 0 SET VALUE HERE
+}'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI SDK">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on linten proxy, `linten --model`
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={ 
+        "priority": 0 # SET VALUE HERE
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Priority header
+
+Set the `x-linten-priority` header to an integer to set the scheduler's request queue priority, for clients that can add headers more easily than body fields. Lower values have higher priority. The header overrides a body `priority` value, and a value that is not an integer gets the same 400 error as a bad body `priority`. An empty header counts as unset. With `drop_params` on, a header value that is not an integer is ignored instead, so the body `priority` or `default_priority` applies. <SinceVersion v="1.109.0" />
+
+The proxy reads the header on the chat completions and text completions routes, such as `/v1/chat/completions`, `/v1/completions` and the Azure-style `/openai/deployments/{model}/chat/completions`, when the router serves the request. It also reads it on `/queue/chat/completions`. Other routes, such as `/v1/responses`, `/v1/messages`, `/v1/embeddings` and `/cursor/chat/completions`, ignore the header, and so does a proxy started with `linten --model` and no config.
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'x-linten-priority: 0' \
+-d '{
+    "model": "{{openai_small}}",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is the meaning of the universe?"
+        }],
+    "priority": 5
+}'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI SDK">
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://localhost:4000/v1"
+)
+
+response = client.chat.completions.create(
+    model="{{openai_small}}",
+    messages=[{"role": "user", "content": "Write a short poem"}],
+    extra_headers={"x-linten-priority": "0"},
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+Responses can also carry a header named `x-linten-priority`. On `/queue/chat/completions` it holds the priority the request was queued at. With the dynamic rate limiter on, every non-streaming response, 429s included, holds the key's priority tier, such as `premium` or `default`. That tier comes from the key's metadata `priority` and is separate from this scheduler queue priority, so don't send it back as the request header.
+
+## Advanced - Redis Caching 
+
+Use redis caching to do request prioritization across multiple instances of Linten. 
+
+### SDK 
+```python
+from linten import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "{{openai_small}}",
+            "linten_params": {
+                "model": "{{openai_small}}",
+                "mock_response": "Hello world this is Macintosh!", # fakes the LLM API call
+                "rpm": 1,
+            },
+        },
+    ],
+    ### REDIS PARAMS ###
+    redis_host=os.environ["REDIS_HOST"], 
+    redis_password=os.environ["REDIS_PASSWORD"], 
+    redis_port=os.environ["REDIS_PORT"], 
+)
+
+try:
+    _response = await router.acompletion( # ADDS TO QUEUE + POLLS + MAKES CALL
+        model="{{openai_small}}",
+        messages=[{"role": "user", "content": "Hey!"}],
+        priority=0, # LOWER IS BETTER
+    )
+except Exception as e:
+    print("didn't make request")
+```
+
+### PROXY 
+
+```yaml
+model_list:
+    - model_name: {{openai_small}}-fake-model
+      linten_params:
+        model: {{openai_small}}
+        mock_response: "hello world!" 
+        api_key: my-good-key
+
+linten_settings:
+    request_timeout: 600 # Will keep retrying until timeout occurs
+
+router_settings:
+    redis_host: os.environ/REDIS_HOST
+    redis_password: os.environ/REDIS_PASSWORD
+    redis_port: os.environ/REDIS_PORT
+```
+
+```bash
+$ linten --config /path/to/config.yaml 
+
+# RUNNING on http://0.0.0.0:4000s
+```
+
+```bash
+curl -X POST 'http://localhost:4000/queue/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-D '{
+    "model": "{{openai_small}}-fake-model",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is the meaning of the universe? 1234"
+        }],
+    "priority": 0 SET VALUE HERE
+}'
+```

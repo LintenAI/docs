@@ -1,0 +1,228 @@
+# VLLM
+
+Pass-through endpoints for VLLM - call provider-specific endpoint, in native format (no translation).
+
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ❌ | Not supported |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ❌ | [Tell us if you need this](https://github.com/LintenAI/linten/issues/new) |
+| Streaming | ✅ | |
+
+Just replace `https://my-vllm-server.com` with `LINTEN_PROXY_BASE_URL/vllm`
+
+#### **Example Usage**
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/vllm/metrics' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+```
+
+Supports **ALL** VLLM Endpoints (including streaming).
+
+## Quick Start
+
+Let's call the VLLM [`/score` endpoint](https://vllm.readthedocs.io/en/latest/api_reference/api_reference.html)
+
+1. Add a VLLM hosted model to your Linten Proxy 
+
+<SinceVersion v="1.72.0" />
+
+```yaml
+model_list:
+  - model_name: "my-vllm-model"
+    linten_params:
+      model: hosted_vllm/vllm-1.72
+      api_base: https://my-vllm-server.com
+```
+
+2. Start Linten Proxy 
+
+```bash
+linten
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+Let's call the VLLM `/score` endpoint
+
+```bash
+curl -X 'POST' \
+  'http://0.0.0.0:4000/vllm/score' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "my-vllm-model",
+  "encoding_format": "float",
+  "text_1": "What is the capital of France?",
+  "text_2": "The capital of France is Paris."
+}'
+```
+
+
+## Authenticate to a vLLM server started with `--api-key`
+
+<SinceVersion v="1.110.0" />
+
+A vLLM server started with `vllm serve <model> --api-key <key>` only accepts `Authorization: Bearer <key>`. Give Linten the same key and it sends that header upstream on `/vllm` calls.
+
+For a model in your `model_list`, set `api_key` on the model. Linten sends it as `Authorization: Bearer <key>`, the same header `/chat/completions` sends for that model. A model with no `api_key` sends `HOSTED_VLLM_API_KEY` when that is set, as `/chat/completions` does. A model with no `api_base` goes to `HOSTED_VLLM_API_BASE` when that is set, and to `VLLM_API_BASE` otherwise. A model that still has no key and is sent to the `VLLM_API_BASE` server sends `VLLM_API_KEY`. In every other case it sends no auth header.
+
+```yaml
+model_list:
+  - model_name: "my-vllm-model"
+    linten_params:
+      model: hosted_vllm/vllm-1.72
+      api_base: https://my-vllm-server.com
+      api_key: os.environ/MY_VLLM_SERVER_KEY
+```
+
+For requests forwarded to `VLLM_API_BASE`, set `VLLM_API_KEY`. Linten sends it as `Authorization: Bearer <key>` and as `x-api-key`.
+
+```bash
+export VLLM_API_BASE="https://my-vllm-server.com"
+export VLLM_API_KEY="<key your vLLM server was started with>"
+```
+
+A mesh in front of the server that validates JWTs, such as Istio `RequestAuthentication`, rejects a bearer that is not a JWT. If your gateway checks `x-api-key` behind such a mesh, point the mesh's `jwtRules` `fromHeaders` at a different header so it stops reading `Authorization`.
+
+The model's `api_base` and `VLLM_API_BASE` can be the server root or end in `/v1`. With a base ending in `/v1`, both `/vllm/v1/chat/completions` and `/vllm/chat/completions` reach the server's `/v1/chat/completions`. Paths outside `/v1`, such as `/tokenize` or `/metrics`, need a base set to the server root.
+
+## Examples
+
+Anything after `http://0.0.0.0:4000/vllm` is treated as a provider-specific route, and handled accordingly.
+
+Key Changes: 
+
+| **Original Endpoint**                                | **Replace With**                  |
+|------------------------------------------------------|-----------------------------------|
+| `https://my-vllm-server.com`          | `http://0.0.0.0:4000/vllm` (LINTEN_PROXY_BASE_URL="http://0.0.0.0:4000")      |
+| `bearer $VLLM_API_KEY`                                 | `bearer anything` (use `bearer LINTEN_VIRTUAL_KEY` if Virtual Keys are setup on proxy)                    |
+
+
+### **Example 1: Metrics endpoint**
+
+#### Linten Proxy Call 
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/vllm/metrics' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LINTEN_VIRTUAL_KEY' \
+```
+
+
+#### Direct VLLM API Call 
+
+```bash
+curl -L -X GET 'https://my-vllm-server.com/metrics' \
+-H 'Content-Type: application/json' \
+```
+
+### **Example 2: Chat API**
+
+#### Linten Proxy Call 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/vllm/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LINTEN_VIRTUAL_KEY' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "I am going to Paris, what should I see?"
+        }
+    ],
+    "max_tokens": 2048,
+    "temperature": 0.8,
+    "top_p": 0.1,
+    "model": "qwen2.5-7b-instruct",
+}'
+```
+
+#### Direct VLLM API Call 
+
+```bash
+curl -L -X POST 'https://my-vllm-server.com/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "I am going to Paris, what should I see?"
+        }
+    ],
+    "max_tokens": 2048,
+    "temperature": 0.8,
+    "top_p": 0.1,
+    "model": "qwen2.5-7b-instruct",
+}'
+```
+
+
+## Advanced - Use with Virtual Keys 
+
+Pre-requisites
+- [Setup proxy with DB](../proxy/virtual_keys.md#setup)
+
+Use this, to avoid giving developers direct access to your VLLM server, but still letting them use VLLM endpoints.
+
+Requests whose `model` is not in your `model_list` are forwarded to the server set in `VLLM_API_BASE`. If that variable is missing, the proxy raises `VLLM_API_BASE is not set`. `HOSTED_VLLM_API_BASE` does not change where those requests go. It only sets the server for a `hosted_vllm/...` model in your `model_list` that has no `api_base`.
+
+### Usage
+
+1. Setup environment
+
+```bash
+export DATABASE_URL=""
+export LINTEN_MASTER_KEY=""
+export VLLM_API_BASE=""
+```
+
+```bash
+linten
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+2. Generate virtual key 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{}'
+```
+
+Expected Response 
+
+```bash
+{
+    ...
+    "key": "sk-<virtual-key>"
+}
+```
+
+3. Test it! 
+
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/vllm/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LINTEN_API_KEY" \
+  --data '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "I am going to Paris, what should I see?"
+        }
+    ],
+    "max_tokens": 2048,
+    "temperature": 0.8,
+    "top_p": 0.1,
+    "model": "qwen2.5-7b-instruct",
+}'
+```
